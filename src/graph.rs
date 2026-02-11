@@ -1110,22 +1110,9 @@ fn compute_masks_with_merge_flags_and_pos(
     }
 }
 
-#[inline]
-fn push_route(
-    routes: &mut Vec<MaskRoute>,
-    reason: RouteReason,
-    lane_id: Option<LaneId>,
-    from_column: usize,
-    to_column: usize,
-    include_up_segment: bool,
-    include_down_segment: bool,
-) {
-    routes.push(MaskRoute { reason, lane_id, from_column, to_column, include_up_segment, include_down_segment });
-}
-
 fn compute_masks_with_routes(
     params: &MaskParams<'_>,
-    include_vertical_segments: bool,
+    include_up_segment: bool,
     connection_masks: &mut Vec<u8>,
     horizontal_diff: &mut Vec<i32>,
     routes: &mut Vec<MaskRoute>,
@@ -1147,21 +1134,20 @@ fn compute_masks_with_routes(
                 && source_column != params.node_column
                 && params.lane_positions_below.get(source_lane_id).is_some()
             {
-                push_route(
-                    routes,
-                    RouteReason::NodeLaneShift,
-                    Some(source_lane_id),
-                    source_column,
-                    params.node_column,
-                    include_vertical_segments,
-                    false,
-                );
+                routes.push(MaskRoute {
+                    reason: RouteReason::NodeLaneShift,
+                    lane_id: Some(source_lane_id),
+                    from_column: source_column,
+                    to_column: params.node_column,
+                    include_up_segment,
+                    include_down_segment: false,
+                });
                 add_route_diff(
                     connection_masks,
                     horizontal_diff,
                     source_column,
                     params.node_column,
-                    include_vertical_segments,
+                    include_up_segment,
                     false,
                 );
             }
@@ -1169,75 +1155,64 @@ fn compute_masks_with_routes(
         }
 
         if let Some(destination_column) = params.lane_positions_below.get(source_lane_id) {
-            push_route(
-                routes,
-                RouteReason::CarryLane,
-                Some(source_lane_id),
-                source_column,
-                destination_column,
-                include_vertical_segments,
-                include_vertical_segments,
-            );
+            routes.push(MaskRoute {
+                reason: RouteReason::CarryLane,
+                lane_id: Some(source_lane_id),
+                from_column: source_column,
+                to_column: destination_column,
+                include_up_segment,
+                include_down_segment: include_up_segment,
+            });
             add_route_diff(
                 connection_masks,
                 horizontal_diff,
                 source_column,
                 destination_column,
-                include_vertical_segments,
-                include_vertical_segments,
+                include_up_segment,
+                include_up_segment,
             );
-        } else if include_vertical_segments {
-            push_route(
-                routes,
-                RouteReason::DanglingUp,
-                Some(source_lane_id),
-                source_column,
-                source_column,
-                true,
-                false,
-            );
+        } else if include_up_segment {
+            routes.push(MaskRoute {
+                reason: RouteReason::DanglingUp,
+                lane_id: Some(source_lane_id),
+                from_column: source_column,
+                to_column: source_column,
+                include_up_segment: true,
+                include_down_segment: false,
+            });
             add_route_diff(connection_masks, horizontal_diff, source_column, source_column, true, false);
         }
     }
 
     for &source_column in params.merged_columns {
-        push_route(
-            routes,
-            RouteReason::MergeIntoNode,
-            None,
-            source_column,
-            params.node_column,
-            include_vertical_segments,
-            false,
-        );
-        add_route_diff(
-            connection_masks,
-            horizontal_diff,
-            source_column,
-            params.node_column,
-            include_vertical_segments,
-            false,
-        );
+        routes.push(MaskRoute {
+            reason: RouteReason::MergeIntoNode,
+            lane_id: None,
+            from_column: source_column,
+            to_column: params.node_column,
+            include_up_segment,
+            include_down_segment: false,
+        });
+        add_route_diff(connection_masks, horizontal_diff, source_column, params.node_column, include_up_segment, false);
     }
 
     for &parent_lane_id in params.parent_lane_ids {
         if let Some(destination_column) = params.lane_positions_below.get(parent_lane_id) {
-            push_route(
-                routes,
-                RouteReason::ParentOut,
-                Some(parent_lane_id),
-                params.node_column,
-                destination_column,
-                false,
-                include_vertical_segments,
-            );
+            routes.push(MaskRoute {
+                reason: RouteReason::ParentOut,
+                lane_id: Some(parent_lane_id),
+                from_column: params.node_column,
+                to_column: destination_column,
+                include_up_segment: false,
+                include_down_segment: include_up_segment,
+            });
             add_route_diff(
                 connection_masks,
                 horizontal_diff,
                 params.node_column,
                 destination_column,
                 false,
-                include_vertical_segments,
+                include_up_segment,
             );
         }
     }
