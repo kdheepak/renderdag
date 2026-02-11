@@ -1,6 +1,6 @@
 [package]
 name = "renderdag"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "An ASCII or Unicode renderer for directed acyclic graphs"
 license = "MIT"
