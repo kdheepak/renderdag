@@ -1930,7 +1930,7 @@ A
     }
 
     #[test]
-    fn lane_collapse_shifts_lanes_left_when_possible_but_orphan_nodes_dont() -> color_eyre::Result<()> {
+    fn lane_collapse_shifts_lanes_left_when_possible_but_terminal_nodes_dont() -> color_eyre::Result<()> {
         test_output(
             r#"
 X: A, B, C
