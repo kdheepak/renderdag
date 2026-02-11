@@ -1,0 +1,24 @@
+[package]
+name = "renderdag"
+version = "0.2.0"
+edition = "2024"
+description = "An ASCII or Unicode renderer for directed acyclic graphs"
+license = "MIT"
+repository = "https://github.com/kdheepak/renderdag"
+homepage = "https://github.com/kdheepak/renderdag"
+documentation = "https://github.com/kdheepak/renderdag"
+readme = "README.md"
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dev-dependencies]
+color-eyre = "0.6"
+pretty_assertions = "1.4"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[profile.bench]
+debug = true
