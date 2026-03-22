@@ -93,10 +93,16 @@ mod tests {
     fn render_with_suffix(rendered: &str, nodes: &[Node]) -> String {
         let mut out = String::with_capacity(rendered.len() + nodes.len() * 16);
 
-        for (i, (line, node)) in rendered.lines().zip(nodes.iter()).enumerate() {
-            if i != 0 {
+        let mut rendered_lines = rendered.lines();
+        let mut first_line = true;
+
+        for node in nodes {
+            let Some(line) = rendered_lines.next() else { break };
+
+            if !first_line {
                 out.push('\n');
             }
+            first_line = false;
 
             out.push_str(line);
 
@@ -116,6 +122,14 @@ mod tests {
                 }
                 out.push(')');
             }
+        }
+
+        for line in rendered_lines {
+            if !first_line {
+                out.push('\n');
+            }
+            first_line = false;
+            out.push_str(line);
         }
 
         out
