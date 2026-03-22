@@ -57,6 +57,10 @@ mod tests {
     }
 
     pub fn test_output(data: &str, expected: &str) -> color_eyre::Result<()> {
+        test_output_with_config(data, expected, RenderConfig::default())
+    }
+
+    pub fn test_output_with_config(data: &str, expected: &str, config: RenderConfig) -> color_eyre::Result<()> {
         use color_eyre::eyre::eyre;
 
         COLOR_EYRE_INIT.call_once(|| {
@@ -65,7 +69,7 @@ mod tests {
 
         let nodes = parse_nodes(data).map_err(|e| eyre!("parse_nodes failed: {:?}", e))?;
 
-        let mut r = GraphRenderer::new(RenderConfig::default());
+        let mut r = GraphRenderer::new(config);
         let actual_glyphs = r.render_to_string(&nodes);
 
         let expected_n = expected.trim().to_string();
