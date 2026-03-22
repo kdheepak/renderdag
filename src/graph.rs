@@ -622,6 +622,8 @@ pub struct GraphLayout<Id> {
     empty_cols_with_above_lane: Vec<usize>,
     connection_masks: Vec<u8>,
     horizontal_diff: Vec<i32>,
+    collapse_candidates: Vec<(usize, usize)>,
+    horizontal_blocked_columns: Vec<bool>,
     lane_positions_below: LanePosIndex,
 }
 
@@ -657,6 +659,8 @@ impl<Id> GraphLayout<Id> {
             empty_cols_with_above_lane: Vec::new(),
             connection_masks: Vec::new(),
             horizontal_diff: Vec::new(),
+            collapse_candidates: Vec::new(),
+            horizontal_blocked_columns: Vec::new(),
             lane_positions_below: LanePosIndex::default(),
         }
     }
@@ -796,41 +800,28 @@ where
         );
         lanes_below.trim_right();
         self.lane_positions_below.rebuild_from_row(&lanes_below);
-
-        loop {
-            if let Some(current_node_column) = self.lane_positions_below.get(node_lane_id) {
-                node_column = current_node_column;
-            }
-
-            let lane_width = lane_ids_above.len().max(lanes_below.len());
-            compute_masks_with_merge_flags_and_pos(
-                &MaskParams {
-                    lane_ids_above: &lane_ids_above,
-                    node_column,
-                    node_lane_id,
-                    merged_columns: &self.merged_columns,
-                    merged_column_flags: &self.merged_column_flags,
-                    parent_lane_ids: &self.parent_lane_ids,
-                    lane_width,
-                    node_lane_exists_above,
-                    lane_positions_below: &self.lane_positions_below,
-                },
-                false,
-                &mut self.connection_masks,
-                &mut self.horizontal_diff,
-            );
-
-            if let Some((lane_id, _source_column, destination_column)) =
-                try_collapse_once_with_move(&lane_ids_above, &mut lanes_below, &self.connection_masks[..lane_width])
-            {
-                self.lane_positions_below.insert(lane_id, destination_column);
-                lanes_below.trim_right();
-                continue;
-            }
-
-            lanes_below.trim_right();
-            break;
-        }
+        compact_lanes_direct(
+            &MaskParams {
+                lane_ids_above: &lane_ids_above,
+                node_column,
+                node_lane_id,
+                merged_columns: &self.merged_columns,
+                merged_column_flags: &self.merged_column_flags,
+                parent_lane_ids: &self.parent_lane_ids,
+                lane_width: lane_ids_above.len().max(lanes_below.len()),
+                node_lane_exists_above,
+                lane_positions_below: &self.lane_positions_below,
+            },
+            &lane_ids_above,
+            &mut lanes_below,
+            node_lane_id,
+            &mut self.connection_masks,
+            &mut self.horizontal_diff,
+            &mut self.collapse_candidates,
+            &mut self.horizontal_blocked_columns,
+        );
+        lanes_below.trim_right();
+        self.lane_positions_below.rebuild_from_row(&lanes_below);
 
         if let Some(current_node_column) = self.lane_positions_below.get(node_lane_id) {
             node_column = current_node_column;
@@ -1397,84 +1388,93 @@ fn build_operations<Id>(
     operations
 }
 
-fn try_collapse_once_with_move<Id>(
+#[inline]
+fn collect_collapse_candidates_into<Id>(
+    lane_ids_above: &[Option<LaneId>],
+    lanes_below: &LaneRow<Id>,
+    collapse_candidates: &mut Vec<(usize, usize)>,
+) {
+    collapse_candidates.clear();
+
+    let lane_count = lanes_below.len();
+    let mut gap_start = None;
+
+    for column in 0..lane_count {
+        let above_lane_id = lane_id_at_snapshot(lane_ids_above, column);
+        let below_lane_id = lanes_below[column].as_ref().map(|lane| lane.lane_id);
+
+        if above_lane_id.is_none() && below_lane_id.is_none() {
+            if gap_start.is_none() {
+                gap_start = Some(column);
+            }
+            continue;
+        }
+
+        if let Some(destination_column) = gap_start.take() {
+            if above_lane_id.is_some() && above_lane_id == below_lane_id {
+                collapse_candidates.push((column, destination_column));
+            }
+        }
+    }
+}
+
+#[inline]
+fn mark_horizontal_blockers(blocked_columns: &mut [bool], from_column: usize, to_column: usize) {
+    for column in from_column.min(to_column)..=from_column.max(to_column) {
+        blocked_columns[column] = true;
+    }
+}
+
+fn compact_lanes_direct<Id>(
+    initial_mask_params: &MaskParams<'_>,
     lane_ids_above: &[Option<LaneId>],
     lanes_below: &mut LaneRow<Id>,
-    connection_masks: &[u8],
-) -> Option<(LaneId, usize, usize)> {
-    let lane_count = lanes_below.len();
-    if lane_count < 2 {
-        return None;
+    node_lane_id: LaneId,
+    connection_masks: &mut Vec<u8>,
+    horizontal_diff: &mut Vec<i32>,
+    collapse_candidates: &mut Vec<(usize, usize)>,
+    horizontal_blocked_columns: &mut Vec<bool>,
+) {
+    let lane_width = initial_mask_params.lane_width;
+    if lane_width < 2 {
+        return;
     }
 
-    let mut best_move: Option<(usize, usize)> = None;
+    compute_masks_with_merge_flags_and_pos(initial_mask_params, false, connection_masks, horizontal_diff);
 
-    let mut destination_column = 0;
-    while destination_column < lane_count {
-        if lanes_below[destination_column].is_some()
-            || lane_id_at_snapshot(lane_ids_above, destination_column).is_some()
-        {
-            destination_column += 1;
-            continue;
-        }
-
-        let mut source_column = destination_column + 1;
-        while source_column < lane_count
-            && lanes_below[source_column].is_none()
-            && lane_id_at_snapshot(lane_ids_above, source_column).is_none()
-        {
-            source_column += 1;
-        }
-
-        if source_column >= lane_count {
-            break;
-        }
-
-        let Some(source_lane) = lanes_below[source_column].as_ref() else {
-            destination_column = source_column + 1;
-            continue;
-        };
-
-        let source_lane_id = source_lane.lane_id;
-        let lane_id_above_source = lane_id_at_snapshot(lane_ids_above, source_column);
-
-        if lane_id_above_source != Some(source_lane_id) {
-            destination_column = source_column + 1;
-            continue;
-        }
-
-        if (connection_masks[destination_column] & (Mask::LEFT | Mask::RIGHT)) != 0 {
-            destination_column = source_column + 1;
-            continue;
-        }
-
-        let candidate_move = (source_column, destination_column);
-        best_move = match best_move {
-            None => Some(candidate_move),
-            Some((best_source_column, best_destination_column)) => {
-                let best_jump = best_source_column.saturating_sub(best_destination_column);
-                let candidate_jump = source_column.saturating_sub(destination_column);
-
-                if source_column > best_source_column
-                    || (source_column == best_source_column && candidate_jump > best_jump)
-                {
-                    Some(candidate_move)
-                } else {
-                    Some((best_source_column, best_destination_column))
-                }
-            },
-        };
-
-        destination_column = source_column + 1;
+    if horizontal_blocked_columns.len() < lane_width {
+        horizontal_blocked_columns.resize(lane_width, false);
+    }
+    horizontal_blocked_columns[..lane_width].fill(false);
+    for column in 0..lane_width {
+        horizontal_blocked_columns[column] = (connection_masks[column] & (Mask::LEFT | Mask::RIGHT)) != 0;
     }
 
-    if let Some((source_column, destination_column)) = best_move {
-        let moved_lane_id = lanes_below[source_column].as_ref().unwrap().lane_id;
+    collect_collapse_candidates_into(lane_ids_above, lanes_below, collapse_candidates);
+
+    // Horizontal blockers only ever grow during collapse, so processing the original movable
+    // sources from right to left reaches the same fixed point as the old one-move-at-a-time loop.
+    for &(source_column, destination_column) in collapse_candidates.iter().rev() {
+        if horizontal_blocked_columns[destination_column] {
+            continue;
+        }
+        if lanes_below[destination_column].is_some() {
+            continue;
+        }
+
+        let Some(source_lane) = lanes_below[source_column].as_ref() else { continue };
+        if lane_id_at_snapshot(lane_ids_above, source_column) != Some(source_lane.lane_id) {
+            continue;
+        }
+
+        let moved_lane_id = source_lane.lane_id;
         lanes_below[destination_column] = lanes_below[source_column].take();
-        return Some((moved_lane_id, source_column, destination_column));
-    }
+        mark_horizontal_blockers(&mut horizontal_blocked_columns[..lane_width], source_column, destination_column);
 
-    None
+        if moved_lane_id == node_lane_id {
+            debug_assert!(lane_ids_above[source_column] == Some(node_lane_id));
+        }
+    }
 }
 
 fn build_below_with_merge_flags<T>(
