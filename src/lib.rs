@@ -1,8 +1,9 @@
 pub mod graph;
 
 pub use graph::{
-    ColumnComputation, ConnectionKind, GraphLayout, GraphNode, GraphRenderer, LaneId, MaskRoute, Node, NodeId,
-    NodeKind, RenderConfig, Renderable, RouteReason, RowPlan, StepDetails, TrackCell,
+    ColumnComputation, ConnectionKind, GraphLayout, GraphNode, GraphRenderer, LaneId, MaskRoute, MissingParentState,
+    Node, NodeId, NodeKind, ParentAvailability, RenderConfig, Renderable, RouteReason, RowPlan, StepDetails,
+    TrackCell,
 };
 
 #[cfg(test)]
@@ -418,7 +419,7 @@ F: G
 G: H
 "#,
             r#"
-⍟─╮ A (B C)
+⊛─╮ A (B C)
 │ ◌ C (B)
 │ │ ◌ D (B)
 │ │ │ ⦿ E (F)
@@ -684,7 +685,7 @@ x: y
 │ │ │ ╭─╯ ● i (h)
 │ │ │ ● ╭─╯ d (h)
 │ │ ● │ │ r (s)
-⊗─┊─┊─┴─┴─╮ h (t u)
+⊘─┊─┊─┴─┴─╮ h (t u)
 │ │ ◌ ╭───╯ s (v)
 │ │ │ ◌ u (t)
 │ │ │ │ ⦿ w (x)
@@ -944,7 +945,7 @@ V: W
 │ │ │ ●─╯ B (R)
 │ │ │ ● R (A)
 │ ◌ │ │ Q (X)
-⊗─┊─┊─┴─╮ A (S T)
+⊘─┊─┊─┴─╮ A (S T)
 │ │ │ ●─╯ T (U)
 │ │ │ ● U (V)
 │ │ │ ◌ V (W)
@@ -1207,6 +1208,60 @@ b: a
 │ ● │ d (c)
 ●─┴─╯ c (b)
 ◌ b (a)
+"#,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn partially_missing_parents_are_exposed_in_the_model() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+Y: X
+X: A, Z
+A
+"#,
+        )?;
+
+        let mut layout = GraphLayout::new();
+        let plans = layout.layout(&nodes);
+
+        assert_eq!(plans[0].parent_availability, ParentAvailability::new(1, 0));
+        assert_eq!(plans[0].parent_availability.missing_parent_state(), MissingParentState::None);
+
+        assert_eq!(plans[1].parent_availability, ParentAvailability::new(1, 1));
+        assert_eq!(plans[1].parent_availability.missing_parent_state(), MissingParentState::Some);
+
+        assert_eq!(plans[2].parent_availability, ParentAvailability::new(0, 0));
+        assert_eq!(plans[2].parent_availability.missing_parent_state(), MissingParentState::None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn partial_parent_omissions_render_as_truncated_merges() -> color_eyre::Result<()> {
+        test_output(
+            r#"
+Y: X
+X: A, Z
+A
+"#,
+            r#"
+⦿ Y (X)
+⊘─╮ X (A Z)
+⊝ │ A
+"#,
+        )?;
+
+        test_output(
+            r#"
+X: A, Z
+A
+"#,
+            r#"
+⊛─╮ X (A Z)
+⊝ │ A
 "#,
         )?;
 
