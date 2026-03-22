@@ -443,7 +443,6 @@ G: H
 │ │ │ ⦿ E (F)
 │ │ │ ● F (G)
 │ │ │ ◌ G (H)
-╵ ╵ ╵ ╵
 "#,
         )?;
         Ok(())
@@ -709,7 +708,6 @@ x: y
 │ │ │ ◌ u (t)
 │ │ │ │ ⦿ w (x)
 │ │ │ │ ◌ x (y)
-╵ ╵ ╵ ╵ ╵
 "#,
         )?;
         Ok(())
@@ -969,7 +967,6 @@ V: W
 │ │ │ ●─╯ T (U)
 │ │ │ ● U (V)
 │ │ │ ◌ V (W)
-╵ ╵ ╵ ╵
 "#,
         )?;
 
@@ -1229,7 +1226,6 @@ b: a
 │ ● │ d (c)
 ●─┴─╯ c (b)
 ◌ b (a)
-╵
 "#,
         )?;
 
@@ -1273,7 +1269,6 @@ A
 ⦿ Y (X)
 ⊘─╮ X (A Z)
 ⊝ │ A
-  ╵
 "#,
         )?;
 
@@ -1285,8 +1280,30 @@ A
             r#"
 ⊛─╮ X (A Z)
 ⊝ │ A
+"#,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_lane_caps_can_be_enabled() -> color_eyre::Result<()> {
+        let mut config = RenderConfig::default();
+        config.set_render_terminal_lanes(true);
+
+        test_output_with_config(
+            r#"
+Y: X
+X: A, Z
+A
+"#,
+            r#"
+⦿ Y (X)
+⊘─╮ X (A Z)
+⊝ │ A
   ╵
 "#,
+            config,
         )?;
 
         Ok(())
@@ -2040,7 +2057,6 @@ T
             r#"
 ◌ X (Z)
 │ ⊝ T
-╵
 "#,
         )?;
 
