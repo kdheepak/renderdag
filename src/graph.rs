@@ -1566,9 +1566,16 @@ fn build_below_with_merge_flags<T>(
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RenderConfig {
     pub glyphs: Glyphs,
+    pub render_terminal_lanes: bool,
+}
+
+impl Default for RenderConfig {
+    fn default() -> Self {
+        Self { glyphs: Glyphs::default(), render_terminal_lanes: false }
+    }
 }
 
 impl RenderConfig {
@@ -1590,6 +1597,11 @@ impl RenderConfig {
     #[inline]
     pub fn set_connection_glyph(&mut self, kind: ConnectionKind, glyph: char) {
         self.glyphs.connection[kind.idx()] = glyph;
+    }
+
+    #[inline]
+    pub fn set_render_terminal_lanes(&mut self, enabled: bool) {
+        self.render_terminal_lanes = enabled;
     }
 }
 
@@ -1650,7 +1662,9 @@ impl GraphRenderer {
             render_plan_with_config(config, &plan, rendered_output);
             rendered_output.push('\n');
         });
-        render_terminal_lanes_with_config(config, &mut self.layout.active_lanes_above, rendered_output);
+        if config.render_terminal_lanes {
+            render_terminal_lanes_with_config(config, &mut self.layout.active_lanes_above, rendered_output);
+        }
 
         self.last_fingerprint = Some(fingerprint);
         true
