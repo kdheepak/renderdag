@@ -1650,6 +1650,7 @@ impl GraphRenderer {
             render_plan_with_config(config, &plan, rendered_output);
             rendered_output.push('\n');
         });
+        render_terminal_lanes_with_config(config, &mut self.layout.active_lanes_above, rendered_output);
 
         self.last_fingerprint = Some(fingerprint);
         true
@@ -1675,6 +1676,35 @@ fn render_plan_with_config<T: GraphNode>(config: &RenderConfig, plan: &RowPlan<'
             TrackCell::Connection(kind) => output.push(config.glyph_for_connection(kind)),
         }
     }
+}
+
+fn render_terminal_lanes_with_config<Id>(
+    config: &RenderConfig,
+    active_lanes: &mut LaneRow<Id>,
+    output: &mut String,
+) {
+    active_lanes.trim_right();
+    if active_lanes.len() == 0 {
+        return;
+    }
+
+    let lane_width = active_lanes.len();
+    output.reserve(lane_width.saturating_mul(2));
+
+    for column_index in 0..lane_width {
+        let connection_kind = if active_lanes[column_index].is_some() {
+            ConnectionKind::EndUp
+        } else {
+            ConnectionKind::Empty
+        };
+        output.push(config.glyph_for_connection(connection_kind));
+
+        if column_index + 1 < lane_width {
+            output.push(config.glyph_for_connection(ConnectionKind::Empty));
+        }
+    }
+
+    output.push('\n');
 }
 
 fn render_fingerprint<T: GraphNode>(nodes: &[T], _config: &RenderConfig) -> u64 {
