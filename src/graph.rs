@@ -63,10 +63,12 @@ pub enum NodeKind {
     Node = 3,
     NodeLeaf = 4,
     Orphan = 5,
+    MergeTruncated = 6,
+    MergeLeafTruncated = 7,
 }
 
 impl NodeKind {
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 8;
 
     #[inline]
     pub const fn idx(self) -> usize {
@@ -81,6 +83,8 @@ impl NodeKind {
             NodeKind::Node => "node",
             NodeKind::NodeLeaf => "node_leaf",
             NodeKind::Orphan => "orphan",
+            NodeKind::MergeTruncated => "merge_truncated",
+            NodeKind::MergeLeafTruncated => "merge_leaf_truncated",
         }
     }
 
@@ -92,6 +96,8 @@ impl NodeKind {
             "node" => Some(NodeKind::Node),
             "nodeleaf" => Some(NodeKind::NodeLeaf),
             "orphan" => Some(NodeKind::Orphan),
+            "mergetruncated" => Some(NodeKind::MergeTruncated),
+            "mergeleaftruncated" => Some(NodeKind::MergeLeafTruncated),
             _ => None,
         }
     }
@@ -116,9 +122,86 @@ impl<'de> Deserialize<'de> for NodeKind {
         let raw_value = String::deserialize(deserializer)?;
         NodeKind::parse(&raw_value).ok_or_else(|| {
             serde::de::Error::custom(format!(
-                "invalid NodeKind '{raw_value}'. expected one of: initial, merge, merge_leaf, node, node_leaf, orphan"
+                "invalid NodeKind '{raw_value}'. expected one of: initial, merge, merge_leaf, node, node_leaf, orphan, merge_truncated, merge_leaf_truncated"
             ))
         })
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MissingParentState {
+    #[default]
+    None = 0,
+    Some = 1,
+    All = 2,
+}
+
+impl MissingParentState {
+    pub const fn as_snake(self) -> &'static str {
+        match self {
+            MissingParentState::None => "none",
+            MissingParentState::Some => "some",
+            MissingParentState::All => "all",
+        }
+    }
+
+    pub fn parse(input: &str) -> Option<Self> {
+        match normalize_key(input).as_str() {
+            "none" => Some(MissingParentState::None),
+            "some" => Some(MissingParentState::Some),
+            "all" => Some(MissingParentState::All),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl Serialize for MissingParentState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_snake())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for MissingParentState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw_value = String::deserialize(deserializer)?;
+        MissingParentState::parse(&raw_value).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "invalid MissingParentState '{raw_value}'. expected one of: none, some, all"
+            ))
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ParentAvailability {
+    pub present_count: usize,
+    pub missing_count: usize,
+}
+
+impl ParentAvailability {
+    #[inline]
+    pub const fn new(present_count: usize, missing_count: usize) -> Self {
+        Self { present_count, missing_count }
+    }
+
+    #[inline]
+    pub const fn missing_parent_state(self) -> MissingParentState {
+        if self.missing_count == 0 {
+            MissingParentState::None
+        } else if self.present_count == 0 {
+            MissingParentState::All
+        } else {
+            MissingParentState::Some
+        }
     }
 }
 
@@ -236,6 +319,8 @@ impl Default for Glyphs {
                 '●', // Node
                 '⦿', // NodeLeaf
                 '◌', // Orphan
+                '⊘', // MergeTruncated
+                '⊛', // MergeLeafTruncated
             ],
             connection: [
                 ' ', // Empty
@@ -300,6 +385,7 @@ pub struct Renderable {
 #[derive(Clone, Debug)]
 pub struct RowPlan<'a, T> {
     pub node: &'a T,
+    pub parent_availability: ParentAvailability,
     pub node_lane_col: usize,
     pub width: usize,
     pub operations: Vec<Renderable>,
@@ -601,8 +687,8 @@ where
         T: GraphNode<Id = Id>,
         Emit: FnMut(RowPlan<'a, T>),
     {
-        for_each_node(nodes, |graph_node, node_id, child_count, is_orphan| {
-            let plan = self.layout_step(graph_node, node_id, child_count, is_orphan);
+        for_each_node(nodes, |graph_node, node_id, child_count, parent_availability| {
+            let plan = self.layout_step(graph_node, node_id, child_count, parent_availability);
             emit(plan);
         });
     }
@@ -622,17 +708,24 @@ where
         T: GraphNode<Id = Id>,
         Emit: FnMut(StepDetails<'a, T>),
     {
-        for_each_node(nodes, |graph_node, node_id, child_count, is_orphan| {
-            let row = self.layout_step_details(graph_node, node_id, child_count, is_orphan);
+        for_each_node(nodes, |graph_node, node_id, child_count, parent_availability| {
+            let row = self.layout_step_details(graph_node, node_id, child_count, parent_availability);
             emit(row);
         });
     }
 
-    fn layout_step<'a, T>(&mut self, node: &'a T, node_id: T::Id, child_count: usize, is_orphan: bool) -> RowPlan<'a, T>
+    fn layout_step<'a, T>(
+        &mut self,
+        node: &'a T,
+        node_id: T::Id,
+        child_count: usize,
+        parent_availability: ParentAvailability,
+    ) -> RowPlan<'a, T>
     where
         T: GraphNode<Id = Id>,
     {
-        let (plan, _debug_details) = self.layout_step_internal(node, node_id, child_count, is_orphan, false);
+        let (plan, _debug_details) =
+            self.layout_step_internal(node, node_id, child_count, parent_availability, false);
         plan
     }
 
@@ -641,12 +734,13 @@ where
         node: &'a T,
         node_id: T::Id,
         child_count: usize,
-        is_orphan: bool,
+        parent_availability: ParentAvailability,
     ) -> StepDetails<'a, T>
     where
         T: GraphNode<Id = Id>,
     {
-        let (plan, debug_details) = self.layout_step_internal(node, node_id, child_count, is_orphan, true);
+        let (plan, debug_details) =
+            self.layout_step_internal(node, node_id, child_count, parent_availability, true);
         let debug_details = debug_details.expect("debug details must be present when include_debug=true");
 
         StepDetails {
@@ -666,7 +760,7 @@ where
         node: &'a T,
         node_id: T::Id,
         child_count: usize,
-        is_orphan: bool,
+        parent_availability: ParentAvailability,
         include_debug: bool,
     ) -> (RowPlan<'a, T>, Option<StepDetailsParts>)
     where
@@ -773,7 +867,7 @@ where
             );
         }
 
-        let node_kind = classify_node(node, child_count, is_orphan);
+        let node_kind = classify_node(node, child_count, parent_availability);
         let operations = build_operations(
             lane_width,
             node_column,
@@ -815,7 +909,7 @@ where
         };
 
         let width = if lane_width == 0 { 0 } else { lane_width.saturating_mul(2).saturating_sub(1) };
-        let plan = RowPlan { node, node_lane_col: node_column, width, operations };
+        let plan = RowPlan { node, parent_availability, node_lane_col: node_column, width, operations };
         self.active_lanes_above = lanes_below;
         self.lane_ids_above = lane_ids_above;
         (plan, debug_details)
@@ -826,7 +920,7 @@ fn for_each_node<'a, T, Id, Emit>(nodes: &'a [T], mut emit: Emit)
 where
     T: GraphNode<Id = Id>,
     Id: Clone + Eq + Hash,
-    Emit: FnMut(&'a T, Id, usize, bool),
+    Emit: FnMut(&'a T, Id, usize, ParentAvailability),
 {
     let mut child_count_by_id = HashMap::with_capacity(nodes.len());
     let mut ordered_node_ids = Vec::with_capacity(nodes.len());
@@ -847,9 +941,18 @@ where
 
     for (graph_node, node_id) in nodes.iter().zip(ordered_node_ids.into_iter()) {
         let child_count = child_count_by_id.get(&node_id).copied().unwrap_or(0);
-        let is_orphan = !graph_node.parents().is_empty()
-            && graph_node.parents().iter().all(|parent_id| !child_count_by_id.contains_key(parent_id));
-        emit(graph_node, node_id, child_count, is_orphan);
+        let mut present_parent_count = 0usize;
+        let mut missing_parent_count = 0usize;
+
+        for parent_id in graph_node.parents() {
+            if child_count_by_id.contains_key(parent_id) {
+                present_parent_count += 1;
+            } else {
+                missing_parent_count += 1;
+            }
+        }
+
+        emit(graph_node, node_id, child_count, ParentAvailability::new(present_parent_count, missing_parent_count));
     }
 }
 
@@ -1226,19 +1329,21 @@ fn compute_masks_with_routes(
     }
 }
 
-fn classify_node<T: GraphNode>(node: &T, child_count: usize, is_orphan: bool) -> NodeKind {
-    if is_orphan {
-        NodeKind::Orphan
-    } else if node.parents().is_empty() {
-        NodeKind::Initial
-    } else if child_count == 0 && node.parents().len() >= 2 {
-        NodeKind::MergeLeaf
-    } else if child_count == 0 {
-        NodeKind::NodeLeaf
-    } else if node.parents().len() >= 2 {
-        NodeKind::Merge
-    } else {
-        NodeKind::Node
+fn classify_node<T: GraphNode>(node: &T, child_count: usize, parent_availability: ParentAvailability) -> NodeKind {
+    match parent_availability.missing_parent_state() {
+        MissingParentState::All => NodeKind::Orphan,
+        MissingParentState::Some => {
+            if child_count == 0 {
+                NodeKind::MergeLeafTruncated
+            } else {
+                NodeKind::MergeTruncated
+            }
+        },
+        MissingParentState::None if node.parents().is_empty() => NodeKind::Initial,
+        MissingParentState::None if child_count == 0 && node.parents().len() >= 2 => NodeKind::MergeLeaf,
+        MissingParentState::None if child_count == 0 => NodeKind::NodeLeaf,
+        MissingParentState::None if node.parents().len() >= 2 => NodeKind::Merge,
+        MissingParentState::None => NodeKind::Node,
     }
 }
 
