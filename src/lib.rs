@@ -2,8 +2,7 @@ pub mod graph;
 
 pub use graph::{
     ColumnComputation, ConnectionKind, GraphLayout, GraphNode, GraphRenderer, LaneId, MaskRoute, MissingParentState,
-    Node, NodeId, NodeKind, ParentAvailability, RenderConfig, Renderable, RouteReason, RowPlan, StepDetails,
-    TrackCell,
+    Node, NodeId, NodeKind, ParentAvailability, RenderConfig, Renderable, RouteReason, RowPlan, StepDetails, TrackCell,
 };
 
 #[cfg(test)]
@@ -14,7 +13,6 @@ mod tests {
 
     static COLOR_EYRE_INIT: Once = Once::new();
 
-    #[must_use]
     pub fn parse_nodes(input: &str) -> color_eyre::eyre::Result<Vec<Node>> {
         fn parse_parent_list(part: &str) -> Vec<NodeId> {
             part.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()
@@ -52,7 +50,7 @@ mod tests {
         msg.push_str(expected);
         msg.push_str("\n\n--- actual ---\n\n");
         msg.push_str(actual);
-        msg.push_str("\n");
+        msg.push('\n');
         msg
     }
 
