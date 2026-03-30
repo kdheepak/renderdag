@@ -1,0 +1,36 @@
+[settings]
+status.show_env = true
+
+[tools]
+rust = "stable"
+uv = "latest"
+
+[tasks."renderdag:cargo-fmt"]
+depends = ["renderdag:ensure-rust-toolchain"]
+description = "Check Rust formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks."renderdag:cargo-check"]
+depends = ["renderdag:ensure-rust-toolchain"]
+description = "Run cargo check with all targets and features"
+run = "cargo check --all-targets --all-features"
+
+[tasks."renderdag:cargo-test"]
+depends = ["renderdag:ensure-rust-toolchain"]
+description = "Run cargo test with all features"
+run = "cargo test --all-features"
+
+[tasks."renderdag:cargo-clippy"]
+depends = ["renderdag:ensure-rust-toolchain"]
+description = "Run clippy with warnings denied"
+run = "cargo clippy --all-targets --all-features -- -D warnings"
+
+[tasks."renderdag:ci"]
+depends = ["renderdag:ensure-rust-toolchain"]
+description = "CI - format, check, test, clippy"
+run = [
+  { task = "renderdag:cargo-fmt" },
+  { task = "renderdag:cargo-check" },
+  { task = "renderdag:cargo-test" },
+  { task = "renderdag:cargo-clippy" },
+]
