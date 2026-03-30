@@ -451,6 +451,19 @@ struct ActiveLane<Id> {
     target: Id,
 }
 
+#[derive(Clone, Debug, Default)]
+struct BuildBelowScratch {
+    parent_lane_ids: Vec<LaneId>,
+    empty_cols_without_above_lane: Vec<usize>,
+    empty_cols_with_above_lane: Vec<usize>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CollapseScratch {
+    collapse_candidates: Vec<(usize, usize)>,
+    horizontal_blocked_columns: Vec<bool>,
+}
+
 #[derive(Clone, Debug)]
 struct LaneRow<Id>(Vec<Option<ActiveLane<Id>>>);
 
@@ -617,13 +630,10 @@ pub struct GraphLayout<Id> {
     lane_ids_above: Vec<Option<LaneId>>,
     merged_columns: Vec<usize>,
     merged_column_flags: Vec<bool>,
-    parent_lane_ids: Vec<LaneId>,
-    empty_cols_without_above_lane: Vec<usize>,
-    empty_cols_with_above_lane: Vec<usize>,
+    build_below_scratch: BuildBelowScratch,
     connection_masks: Vec<u8>,
     horizontal_diff: Vec<i32>,
-    collapse_candidates: Vec<(usize, usize)>,
-    horizontal_blocked_columns: Vec<bool>,
+    collapse_scratch: CollapseScratch,
     lane_positions_below: LanePosIndex,
 }
 
@@ -654,13 +664,10 @@ impl<Id> GraphLayout<Id> {
             lane_ids_above: Vec::new(),
             merged_columns: Vec::new(),
             merged_column_flags: Vec::new(),
-            parent_lane_ids: Vec::new(),
-            empty_cols_without_above_lane: Vec::new(),
-            empty_cols_with_above_lane: Vec::new(),
+            build_below_scratch: BuildBelowScratch::default(),
             connection_masks: Vec::new(),
             horizontal_diff: Vec::new(),
-            collapse_candidates: Vec::new(),
-            horizontal_blocked_columns: Vec::new(),
+            collapse_scratch: CollapseScratch::default(),
             lane_positions_below: LanePosIndex::default(),
         }
     }
@@ -728,8 +735,7 @@ where
     where
         T: GraphNode<Id = Id>,
     {
-        let (plan, _debug_details) =
-            self.layout_step_internal(node, node_id, child_count, parent_availability, false);
+        let (plan, _debug_details) = self.layout_step_internal(node, node_id, child_count, parent_availability, false);
         plan
     }
 
@@ -743,8 +749,7 @@ where
     where
         T: GraphNode<Id = Id>,
     {
-        let (plan, debug_details) =
-            self.layout_step_internal(node, node_id, child_count, parent_availability, true);
+        let (plan, debug_details) = self.layout_step_internal(node, node_id, child_count, parent_availability, true);
         let debug_details = debug_details.expect("debug details must be present when include_debug=true");
 
         StepDetails {
@@ -788,15 +793,15 @@ where
         build_below_with_merge_flags(
             &mut self.next_lane_id,
             &mut lanes_below,
-            &lane_ids_above,
-            node,
-            node_column,
-            &self.merged_columns,
-            &self.merged_column_flags,
-            node_lane_id,
-            &mut self.parent_lane_ids,
-            &mut self.empty_cols_without_above_lane,
-            &mut self.empty_cols_with_above_lane,
+            BuildBelowParams {
+                lane_ids_above: &lane_ids_above,
+                node,
+                node_column,
+                merged_columns: &self.merged_columns,
+                merged_column_flags: &self.merged_column_flags,
+                node_lane_id,
+            },
+            &mut self.build_below_scratch,
         );
         lanes_below.trim_right();
         self.lane_positions_below.rebuild_from_row(&lanes_below);
@@ -807,18 +812,15 @@ where
                 node_lane_id,
                 merged_columns: &self.merged_columns,
                 merged_column_flags: &self.merged_column_flags,
-                parent_lane_ids: &self.parent_lane_ids,
+                parent_lane_ids: &self.build_below_scratch.parent_lane_ids,
                 lane_width: lane_ids_above.len().max(lanes_below.len()),
                 node_lane_exists_above,
                 lane_positions_below: &self.lane_positions_below,
             },
-            &lane_ids_above,
             &mut lanes_below,
-            node_lane_id,
             &mut self.connection_masks,
             &mut self.horizontal_diff,
-            &mut self.collapse_candidates,
-            &mut self.horizontal_blocked_columns,
+            &mut self.collapse_scratch,
         );
         lanes_below.trim_right();
         self.lane_positions_below.rebuild_from_row(&lanes_below);
@@ -834,7 +836,7 @@ where
             node_lane_id,
             merged_columns: &self.merged_columns,
             merged_column_flags: &self.merged_column_flags,
-            parent_lane_ids: &self.parent_lane_ids,
+            parent_lane_ids: &self.build_below_scratch.parent_lane_ids,
             lane_width,
             node_lane_exists_above,
             lane_positions_below: &self.lane_positions_below,
@@ -889,7 +891,7 @@ where
             Some(StepDetailsParts {
                 node_lane_id,
                 merge_columns: self.merged_columns.clone(),
-                parent_lane_ids: self.parent_lane_ids.clone(),
+                parent_lane_ids: self.build_below_scratch.parent_lane_ids.clone(),
                 lanes_above: lanes_above_snapshot,
                 lanes_below: lanes_below_snapshot,
                 routes,
@@ -1107,6 +1109,15 @@ struct MaskParams<'a> {
     lane_width: usize,
     node_lane_exists_above: bool,
     lane_positions_below: &'a LanePosIndex,
+}
+
+struct BuildBelowParams<'a, T> {
+    lane_ids_above: &'a [Option<LaneId>],
+    node: &'a T,
+    node_column: usize,
+    merged_columns: &'a [usize],
+    merged_column_flags: &'a [bool],
+    node_lane_id: LaneId,
 }
 
 #[inline]
@@ -1410,31 +1421,32 @@ fn collect_collapse_candidates_into<Id>(
             continue;
         }
 
-        if let Some(destination_column) = gap_start.take() {
-            if above_lane_id.is_some() && above_lane_id == below_lane_id {
-                collapse_candidates.push((column, destination_column));
-            }
+        if let Some(destination_column) = gap_start.take()
+            && above_lane_id.is_some()
+            && above_lane_id == below_lane_id
+        {
+            collapse_candidates.push((column, destination_column));
         }
     }
 }
 
 #[inline]
 fn mark_horizontal_blockers(blocked_columns: &mut [bool], from_column: usize, to_column: usize) {
-    for column in from_column.min(to_column)..=from_column.max(to_column) {
-        blocked_columns[column] = true;
+    for blocked_column in
+        blocked_columns.iter_mut().take(from_column.max(to_column) + 1).skip(from_column.min(to_column))
+    {
+        *blocked_column = true;
     }
 }
 
 fn compact_lanes_direct<Id>(
     initial_mask_params: &MaskParams<'_>,
-    lane_ids_above: &[Option<LaneId>],
     lanes_below: &mut LaneRow<Id>,
-    node_lane_id: LaneId,
     connection_masks: &mut Vec<u8>,
     horizontal_diff: &mut Vec<i32>,
-    collapse_candidates: &mut Vec<(usize, usize)>,
-    horizontal_blocked_columns: &mut Vec<bool>,
+    scratch: &mut CollapseScratch,
 ) {
+    let CollapseScratch { collapse_candidates, horizontal_blocked_columns } = scratch;
     let lane_width = initial_mask_params.lane_width;
     if lane_width < 2 {
         return;
@@ -1450,7 +1462,7 @@ fn compact_lanes_direct<Id>(
         horizontal_blocked_columns[column] = (connection_masks[column] & (Mask::LEFT | Mask::RIGHT)) != 0;
     }
 
-    collect_collapse_candidates_into(lane_ids_above, lanes_below, collapse_candidates);
+    collect_collapse_candidates_into(initial_mask_params.lane_ids_above, lanes_below, collapse_candidates);
 
     // Horizontal blockers only ever grow during collapse, so processing the original movable
     // sources from right to left reaches the same fixed point as the old one-move-at-a-time loop.
@@ -1463,7 +1475,7 @@ fn compact_lanes_direct<Id>(
         }
 
         let Some(source_lane) = lanes_below[source_column].as_ref() else { continue };
-        if lane_id_at_snapshot(lane_ids_above, source_column) != Some(source_lane.lane_id) {
+        if lane_id_at_snapshot(initial_mask_params.lane_ids_above, source_column) != Some(source_lane.lane_id) {
             continue;
         }
 
@@ -1471,8 +1483,8 @@ fn compact_lanes_direct<Id>(
         lanes_below[destination_column] = lanes_below[source_column].take();
         mark_horizontal_blockers(&mut horizontal_blocked_columns[..lane_width], source_column, destination_column);
 
-        if moved_lane_id == node_lane_id {
-            debug_assert!(lane_ids_above[source_column] == Some(node_lane_id));
+        if moved_lane_id == initial_mask_params.node_lane_id {
+            debug_assert!(initial_mask_params.lane_ids_above[source_column] == Some(initial_mask_params.node_lane_id));
         }
     }
 }
@@ -1480,20 +1492,15 @@ fn compact_lanes_direct<Id>(
 fn build_below_with_merge_flags<T>(
     next_lane_id_counter: &mut LaneId,
     lanes_below: &mut LaneRow<T::Id>,
-    lane_ids_above: &[Option<LaneId>],
-    node: &T,
-    node_column: usize,
-    merged_columns: &[usize],
-    merged_column_flags: &[bool],
-    node_lane_id: LaneId,
-    parent_lane_ids: &mut Vec<LaneId>,
-    empty_cols_without_above_lane: &mut Vec<usize>,
-    empty_cols_with_above_lane: &mut Vec<usize>,
+    params: BuildBelowParams<'_, T>,
+    scratch: &mut BuildBelowScratch,
 ) where
     T: GraphNode,
     T::Id: Clone,
 {
-    for &merged_column in merged_columns {
+    let BuildBelowScratch { parent_lane_ids, empty_cols_without_above_lane, empty_cols_with_above_lane } = scratch;
+
+    for &merged_column in params.merged_columns {
         lanes_below[merged_column] = None;
     }
 
@@ -1501,24 +1508,24 @@ fn build_below_with_merge_flags<T>(
     empty_cols_without_above_lane.clear();
     empty_cols_with_above_lane.clear();
 
-    match node.parents().split_first() {
+    match params.node.parents().split_first() {
         None => {
-            lanes_below[node_column] = None;
+            lanes_below[params.node_column] = None;
         },
         Some((first_parent, extra_parents)) => {
-            if let Some(lane) = lanes_below.get_mut(node_column).and_then(|lane_option| lane_option.as_mut()) {
+            if let Some(lane) = lanes_below.get_mut(params.node_column).and_then(|lane_option| lane_option.as_mut()) {
                 lane.target = first_parent.clone();
-                parent_lane_ids.push(node_lane_id);
+                parent_lane_ids.push(params.node_lane_id);
             }
 
-            let scan_start_column = node_column.saturating_add(1);
+            let scan_start_column = params.node_column.saturating_add(1);
             if scan_start_column < lanes_below.len() {
                 for column_index in scan_start_column..lanes_below.len() {
-                    if column_index == node_column || is_merge_col(merged_column_flags, column_index) {
+                    if column_index == params.node_column || is_merge_col(params.merged_column_flags, column_index) {
                         continue;
                     }
                     if lanes_below[column_index].is_none() {
-                        if lane_id_at_snapshot(lane_ids_above, column_index).is_none() {
+                        if lane_id_at_snapshot(params.lane_ids_above, column_index).is_none() {
                             empty_cols_without_above_lane.push(column_index);
                         } else {
                             empty_cols_with_above_lane.push(column_index);
@@ -1566,16 +1573,10 @@ fn build_below_with_merge_flags<T>(
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct RenderConfig {
     pub glyphs: Glyphs,
     pub render_terminal_lanes: bool,
-}
-
-impl Default for RenderConfig {
-    fn default() -> Self {
-        Self { glyphs: Glyphs::default(), render_terminal_lanes: false }
-    }
 }
 
 impl RenderConfig {
@@ -1692,11 +1693,7 @@ fn render_plan_with_config<T: GraphNode>(config: &RenderConfig, plan: &RowPlan<'
     }
 }
 
-fn render_terminal_lanes_with_config<Id>(
-    config: &RenderConfig,
-    active_lanes: &mut LaneRow<Id>,
-    output: &mut String,
-) {
+fn render_terminal_lanes_with_config<Id>(config: &RenderConfig, active_lanes: &mut LaneRow<Id>, output: &mut String) {
     active_lanes.trim_right();
     if active_lanes.len() == 0 {
         return;
@@ -1706,11 +1703,8 @@ fn render_terminal_lanes_with_config<Id>(
     output.reserve(lane_width.saturating_mul(2));
 
     for column_index in 0..lane_width {
-        let connection_kind = if active_lanes[column_index].is_some() {
-            ConnectionKind::EndUp
-        } else {
-            ConnectionKind::Empty
-        };
+        let connection_kind =
+            if active_lanes[column_index].is_some() { ConnectionKind::EndUp } else { ConnectionKind::Empty };
         output.push(config.glyph_for_connection(connection_kind));
 
         if column_index + 1 < lane_width {
