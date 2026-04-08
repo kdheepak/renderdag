@@ -1,8 +1,9 @@
 pub mod graph;
 
 pub use graph::{
-    ColumnComputation, ConnectionKind, GraphLayout, GraphNode, GraphRenderer, LaneId, MaskRoute, MissingParentState,
-    Node, NodeId, NodeKind, ParentAvailability, RenderConfig, Renderable, RouteReason, RowPlan, StepDetails, TrackCell,
+    ColumnComputation, ConnectionKind, GraphLayout, GraphNode, GraphRenderer, LaneId, MaskRoute,
+    MissingParentState, Node, NodeId, NodeKind, ParentAvailability, RenderConfig, Renderable,
+    RouteReason, RowPlan, StepDetails, TrackCell,
 };
 
 #[cfg(test)]
@@ -15,7 +16,11 @@ mod tests {
 
     pub fn parse_nodes(input: &str) -> color_eyre::eyre::Result<Vec<Node>> {
         fn parse_parent_list(part: &str) -> Vec<NodeId> {
-            part.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()
+            part.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
         }
 
         let mut nodes = Vec::new();
@@ -58,7 +63,11 @@ mod tests {
         test_output_with_config(data, expected, RenderConfig::default())
     }
 
-    pub fn test_output_with_config(data: &str, expected: &str, config: RenderConfig) -> color_eyre::Result<()> {
+    pub fn test_output_with_config(
+        data: &str,
+        expected: &str,
+        config: RenderConfig,
+    ) -> color_eyre::Result<()> {
         use color_eyre::eyre::eyre;
 
         COLOR_EYRE_INIT.call_once(|| {
@@ -73,10 +82,15 @@ mod tests {
         let expected_n = expected.trim().to_string();
 
         // If the expected output contains node ids / parents, enrich the actual output the same way.
-        let expected_has_suffix = expected_n.chars().any(|c| c.is_ascii_alphanumeric() || c == '(' || c == ')');
+        let expected_has_suffix = expected_n
+            .chars()
+            .any(|c| c.is_ascii_alphanumeric() || c == '(' || c == ')');
 
-        let actual_pretty =
-            if expected_has_suffix { render_with_suffix(&actual_glyphs, &nodes) } else { actual_glyphs };
+        let actual_pretty = if expected_has_suffix {
+            render_with_suffix(&actual_glyphs, &nodes)
+        } else {
+            actual_glyphs
+        };
 
         let actual_n = actual_pretty.trim().to_string();
 
@@ -99,7 +113,9 @@ mod tests {
         let mut first_line = true;
 
         for node in nodes {
-            let Some(line) = rendered_lines.next() else { break };
+            let Some(line) = rendered_lines.next() else {
+                break;
+            };
 
             if !first_line {
                 out.push('\n');
@@ -1244,13 +1260,22 @@ A
         let plans = layout.layout(&nodes);
 
         assert_eq!(plans[0].parent_availability, ParentAvailability::new(1, 0));
-        assert_eq!(plans[0].parent_availability.missing_parent_state(), MissingParentState::None);
+        assert_eq!(
+            plans[0].parent_availability.missing_parent_state(),
+            MissingParentState::None
+        );
 
         assert_eq!(plans[1].parent_availability, ParentAvailability::new(1, 1));
-        assert_eq!(plans[1].parent_availability.missing_parent_state(), MissingParentState::Some);
+        assert_eq!(
+            plans[1].parent_availability.missing_parent_state(),
+            MissingParentState::Some
+        );
 
         assert_eq!(plans[2].parent_availability, ParentAvailability::new(0, 0));
-        assert_eq!(plans[2].parent_availability.missing_parent_state(), MissingParentState::None);
+        assert_eq!(
+            plans[2].parent_availability.missing_parent_state(),
+            MissingParentState::None
+        );
 
         Ok(())
     }
@@ -1436,7 +1461,8 @@ A
     }
 
     #[test]
-    fn test_dense_interwoven_merge_fixture_with_hook_avoiding_base_vertical() -> color_eyre::Result<()> {
+    fn test_dense_interwoven_merge_fixture_with_hook_avoiding_base_vertical()
+    -> color_eyre::Result<()> {
         test_output(
             r#"
 G: A, D, B, E, F
@@ -2024,7 +2050,8 @@ A
     }
 
     #[test]
-    fn lane_collapse_shifts_lanes_left_when_possible_but_terminal_nodes_dont() -> color_eyre::Result<()> {
+    fn lane_collapse_shifts_lanes_left_when_possible_but_terminal_nodes_dont()
+    -> color_eyre::Result<()> {
         test_output(
             r#"
 X: A, B, C
