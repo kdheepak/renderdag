@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/kdheepak/renderdag/compare/v0.3.0...v0.3.1) - 2026-04-08
+
+### Other
+
+- *(lib)* reformat code for improved readability and consistency
+- *(graph)* reformat code for improved readability and consistency
+- *(ci)* update mise-action to v4 in workflow
+- *(lib)* format imports and update string push usage in tests
+- *(graph)* group scratch data into structs for build and collapse steps
+- add mise config, tasks, and rust toolchain for CI integration
+
 ## [0.3.0](https://github.com/kdheepak/renderdag/compare/v0.2.1...v0.3.0) - 2026-03-22
 
 ### Added
