@@ -15,7 +15,10 @@ pub struct Node {
 impl Node {
     #[inline]
     pub fn new(id: impl Into<NodeId>, parents: Vec<NodeId>) -> Self {
-        Self { id: id.into(), parents }
+        Self {
+            id: id.into(),
+            parents,
+        }
     }
 }
 
@@ -190,7 +193,10 @@ pub struct ParentAvailability {
 impl ParentAvailability {
     #[inline]
     pub const fn new(present_count: usize, missing_count: usize) -> Self {
-        Self { present_count, missing_count }
+        Self {
+            present_count,
+            missing_count,
+        }
     }
 
     #[inline]
@@ -529,7 +535,9 @@ impl<Id> LaneRow<Id> {
 
     #[inline]
     fn lane_id_at(&self, col: usize) -> Option<LaneId> {
-        self.0.get(col).and_then(|opt| opt.as_ref().map(|l| l.lane_id))
+        self.0
+            .get(col)
+            .and_then(|opt| opt.as_ref().map(|l| l.lane_id))
     }
 
     fn find_target_matches_into(&self, target: &Id, merge_columns: &mut Vec<usize>) -> Option<usize>
@@ -698,10 +706,13 @@ where
         T: GraphNode<Id = Id>,
         Emit: FnMut(RowPlan<'a, T>),
     {
-        for_each_node(nodes, |graph_node, node_id, child_count, parent_availability| {
-            let plan = self.layout_step(graph_node, node_id, child_count, parent_availability);
-            emit(plan);
-        });
+        for_each_node(
+            nodes,
+            |graph_node, node_id, child_count, parent_availability| {
+                let plan = self.layout_step(graph_node, node_id, child_count, parent_availability);
+                emit(plan);
+            },
+        );
     }
 
     #[must_use]
@@ -719,10 +730,14 @@ where
         T: GraphNode<Id = Id>,
         Emit: FnMut(StepDetails<'a, T>),
     {
-        for_each_node(nodes, |graph_node, node_id, child_count, parent_availability| {
-            let row = self.layout_step_details(graph_node, node_id, child_count, parent_availability);
-            emit(row);
-        });
+        for_each_node(
+            nodes,
+            |graph_node, node_id, child_count, parent_availability| {
+                let row =
+                    self.layout_step_details(graph_node, node_id, child_count, parent_availability);
+                emit(row);
+            },
+        );
     }
 
     fn layout_step<'a, T>(
@@ -735,7 +750,8 @@ where
     where
         T: GraphNode<Id = Id>,
     {
-        let (plan, _debug_details) = self.layout_step_internal(node, node_id, child_count, parent_availability, false);
+        let (plan, _debug_details) =
+            self.layout_step_internal(node, node_id, child_count, parent_availability, false);
         plan
     }
 
@@ -749,8 +765,10 @@ where
     where
         T: GraphNode<Id = Id>,
     {
-        let (plan, debug_details) = self.layout_step_internal(node, node_id, child_count, parent_availability, true);
-        let debug_details = debug_details.expect("debug details must be present when include_debug=true");
+        let (plan, debug_details) =
+            self.layout_step_internal(node, node_id, child_count, parent_availability, true);
+        let debug_details =
+            debug_details.expect("debug details must be present when include_debug=true");
 
         StepDetails {
             plan,
@@ -778,10 +796,19 @@ where
         let mut lanes_above = std::mem::take(&mut self.active_lanes_above);
         lanes_above.trim_right();
 
-        let existing_node_column = lanes_above.find_target_matches_into(&node_id, &mut self.merged_columns);
-        make_merge_flags_into(&mut self.merged_column_flags, &self.merged_columns, lanes_above.len());
-        let (node_lane_id, mut node_column) =
-            ensure_node_lane(&mut self.next_lane_id, &mut lanes_above, &node_id, existing_node_column);
+        let existing_node_column =
+            lanes_above.find_target_matches_into(&node_id, &mut self.merged_columns);
+        make_merge_flags_into(
+            &mut self.merged_column_flags,
+            &self.merged_columns,
+            lanes_above.len(),
+        );
+        let (node_lane_id, mut node_column) = ensure_node_lane(
+            &mut self.next_lane_id,
+            &mut lanes_above,
+            &node_id,
+            existing_node_column,
+        );
         let node_lane_exists_above = existing_node_column.is_some();
 
         debug_assert!(lanes_above.lane_id_at(node_column) == Some(node_lane_id));
@@ -886,7 +913,9 @@ where
 
             let mut lanes_above_snapshot = lane_ids_above.clone();
             lanes_above_snapshot.resize(lane_width, None);
-            let lanes_below_snapshot = (0..lane_width).map(|column| lanes_below.lane_id_at(column)).collect::<Vec<_>>();
+            let lanes_below_snapshot = (0..lane_width)
+                .map(|column| lanes_below.lane_id_at(column))
+                .collect::<Vec<_>>();
 
             Some(StepDetailsParts {
                 node_lane_id,
@@ -901,8 +930,18 @@ where
             None
         };
 
-        let width = if lane_width == 0 { 0 } else { lane_width.saturating_mul(2).saturating_sub(1) };
-        let plan = RowPlan { node, parent_availability, node_lane_col: node_column, width, operations };
+        let width = if lane_width == 0 {
+            0
+        } else {
+            lane_width.saturating_mul(2).saturating_sub(1)
+        };
+        let plan = RowPlan {
+            node,
+            parent_availability,
+            node_lane_col: node_column,
+            width,
+            operations,
+        };
         self.active_lanes_above = lanes_below;
         self.lane_ids_above = lane_ids_above;
         (plan, debug_details)
@@ -945,7 +984,12 @@ where
             }
         }
 
-        emit(graph_node, node_id, child_count, ParentAvailability::new(present_parent_count, missing_parent_count));
+        emit(
+            graph_node,
+            node_id,
+            child_count,
+            ParentAvailability::new(present_parent_count, missing_parent_count),
+        );
     }
 }
 
@@ -970,11 +1014,17 @@ fn ensure_node_lane<Id: Clone>(
     let assigned_lane_id = next_lane_id(next_lane_id_counter);
 
     if let Some(free_column) = lane_columns.first_free_col() {
-        lane_columns[free_column] = Some(ActiveLane { lane_id: assigned_lane_id, target: node_id.clone() });
+        lane_columns[free_column] = Some(ActiveLane {
+            lane_id: assigned_lane_id,
+            target: node_id.clone(),
+        });
         return (assigned_lane_id, free_column);
     }
 
-    lane_columns.push(Some(ActiveLane { lane_id: assigned_lane_id, target: node_id.clone() }));
+    lane_columns.push(Some(ActiveLane {
+        lane_id: assigned_lane_id,
+        target: node_id.clone(),
+    }));
     (assigned_lane_id, lane_columns.len() - 1)
 }
 
@@ -1084,7 +1134,11 @@ fn add_route_diff(
 }
 
 #[inline]
-fn make_merge_flags_into(merged_column_flags: &mut Vec<bool>, merged_columns: &[usize], lane_count: usize) {
+fn make_merge_flags_into(
+    merged_column_flags: &mut Vec<bool>,
+    merged_columns: &[usize],
+    lane_count: usize,
+) {
     merged_column_flags.resize(lane_count, false);
     merged_column_flags[..lane_count].fill(false);
     for &merged_column in merged_columns {
@@ -1096,7 +1150,10 @@ fn make_merge_flags_into(merged_column_flags: &mut Vec<bool>, merged_columns: &[
 
 #[inline]
 fn is_merge_col(merged_column_flags: &[bool], column_index: usize) -> bool {
-    merged_column_flags.get(column_index).copied().unwrap_or(false)
+    merged_column_flags
+        .get(column_index)
+        .copied()
+        .unwrap_or(false)
 }
 
 struct MaskParams<'a> {
@@ -1121,7 +1178,11 @@ struct BuildBelowParams<'a, T> {
 }
 
 #[inline]
-fn ensure_mask_buffers(connection_masks: &mut Vec<u8>, horizontal_diff: &mut Vec<i32>, lane_width: usize) {
+fn ensure_mask_buffers(
+    connection_masks: &mut Vec<u8>,
+    horizontal_diff: &mut Vec<i32>,
+    lane_width: usize,
+) {
     if connection_masks.len() < lane_width {
         connection_masks.resize(lane_width, 0);
     }
@@ -1145,7 +1206,9 @@ fn compute_masks_with_merge_flags_and_pos(
     let horizontal_diff = &mut horizontal_diff[..params.lane_width.saturating_add(1)];
 
     for (source_column, source_lane_id) in params.lane_ids_above.iter().enumerate() {
-        let Some(source_lane_id) = *source_lane_id else { continue };
+        let Some(source_lane_id) = *source_lane_id else {
+            continue;
+        };
 
         if is_merge_col(params.merged_column_flags, source_column) {
             continue;
@@ -1228,7 +1291,9 @@ fn compute_masks_with_routes(
     let horizontal_diff = &mut horizontal_diff[..params.lane_width.saturating_add(1)];
 
     for (source_column, source_lane_id) in params.lane_ids_above.iter().enumerate() {
-        let Some(source_lane_id) = *source_lane_id else { continue };
+        let Some(source_lane_id) = *source_lane_id else {
+            continue;
+        };
 
         if is_merge_col(params.merged_column_flags, source_column) {
             continue;
@@ -1285,7 +1350,14 @@ fn compute_masks_with_routes(
                 include_up_segment: true,
                 include_down_segment: false,
             });
-            add_route_diff(connection_masks, horizontal_diff, source_column, source_column, true, false);
+            add_route_diff(
+                connection_masks,
+                horizontal_diff,
+                source_column,
+                source_column,
+                true,
+                false,
+            );
         }
     }
 
@@ -1298,7 +1370,14 @@ fn compute_masks_with_routes(
             include_up_segment,
             include_down_segment: false,
         });
-        add_route_diff(connection_masks, horizontal_diff, source_column, params.node_column, include_up_segment, false);
+        add_route_diff(
+            connection_masks,
+            horizontal_diff,
+            source_column,
+            params.node_column,
+            include_up_segment,
+            false,
+        );
     }
 
     for &parent_lane_id in params.parent_lane_ids {
@@ -1331,7 +1410,11 @@ fn compute_masks_with_routes(
     }
 }
 
-fn classify_node<T: GraphNode>(node: &T, child_count: usize, parent_availability: ParentAvailability) -> NodeKind {
+fn classify_node<T: GraphNode>(
+    node: &T,
+    child_count: usize,
+    parent_availability: ParentAvailability,
+) -> NodeKind {
     match parent_availability.missing_parent_state() {
         MissingParentState::All => NodeKind::Orphan,
         MissingParentState::Some => {
@@ -1340,9 +1423,11 @@ fn classify_node<T: GraphNode>(node: &T, child_count: usize, parent_availability
             } else {
                 NodeKind::MergeTruncated
             }
-        },
+        }
         MissingParentState::None if node.parents().is_empty() => NodeKind::Initial,
-        MissingParentState::None if child_count == 0 && node.parents().len() >= 2 => NodeKind::MergeLeaf,
+        MissingParentState::None if child_count == 0 && node.parents().len() >= 2 => {
+            NodeKind::MergeLeaf
+        }
         MissingParentState::None if child_count == 0 => NodeKind::NodeLeaf,
         MissingParentState::None if node.parents().len() >= 2 => NodeKind::Merge,
         MissingParentState::None => NodeKind::Node,
@@ -1365,7 +1450,9 @@ fn build_operations<Id>(
         let lane_id_below = lanes_below.lane_id_at(column_index);
 
         let lane_id = match (lane_id_above, lane_id_below) {
-            (Some(above_lane_id), Some(below_lane_id)) if above_lane_id == below_lane_id => Some(above_lane_id),
+            (Some(above_lane_id), Some(below_lane_id)) if above_lane_id == below_lane_id => {
+                Some(above_lane_id)
+            }
             (Some(above_lane_id), None) => Some(above_lane_id),
             (None, Some(below_lane_id)) => Some(below_lane_id),
             _ => None,
@@ -1386,12 +1473,20 @@ fn build_operations<Id>(
             ConnectionKind::Empty
         };
 
-        operations.push(Renderable { x: x_position, lane_id, cell });
+        operations.push(Renderable {
+            x: x_position,
+            lane_id,
+            cell,
+        });
         x_position += 1;
 
         if column_index < lane_width.saturating_sub(1) {
             let cell = TrackCell::Connection(inter_column_connection_kind);
-            operations.push(Renderable { x: x_position, lane_id, cell });
+            operations.push(Renderable {
+                x: x_position,
+                lane_id,
+                cell,
+            });
             x_position += 1;
         }
     }
@@ -1432,8 +1527,10 @@ fn collect_collapse_candidates_into<Id>(
 
 #[inline]
 fn mark_horizontal_blockers(blocked_columns: &mut [bool], from_column: usize, to_column: usize) {
-    for blocked_column in
-        blocked_columns.iter_mut().take(from_column.max(to_column) + 1).skip(from_column.min(to_column))
+    for blocked_column in blocked_columns
+        .iter_mut()
+        .take(from_column.max(to_column) + 1)
+        .skip(from_column.min(to_column))
     {
         *blocked_column = true;
     }
@@ -1446,23 +1543,36 @@ fn compact_lanes_direct<Id>(
     horizontal_diff: &mut Vec<i32>,
     scratch: &mut CollapseScratch,
 ) {
-    let CollapseScratch { collapse_candidates, horizontal_blocked_columns } = scratch;
+    let CollapseScratch {
+        collapse_candidates,
+        horizontal_blocked_columns,
+    } = scratch;
     let lane_width = initial_mask_params.lane_width;
     if lane_width < 2 {
         return;
     }
 
-    compute_masks_with_merge_flags_and_pos(initial_mask_params, false, connection_masks, horizontal_diff);
+    compute_masks_with_merge_flags_and_pos(
+        initial_mask_params,
+        false,
+        connection_masks,
+        horizontal_diff,
+    );
 
     if horizontal_blocked_columns.len() < lane_width {
         horizontal_blocked_columns.resize(lane_width, false);
     }
     horizontal_blocked_columns[..lane_width].fill(false);
     for column in 0..lane_width {
-        horizontal_blocked_columns[column] = (connection_masks[column] & (Mask::LEFT | Mask::RIGHT)) != 0;
+        horizontal_blocked_columns[column] =
+            (connection_masks[column] & (Mask::LEFT | Mask::RIGHT)) != 0;
     }
 
-    collect_collapse_candidates_into(initial_mask_params.lane_ids_above, lanes_below, collapse_candidates);
+    collect_collapse_candidates_into(
+        initial_mask_params.lane_ids_above,
+        lanes_below,
+        collapse_candidates,
+    );
 
     // Horizontal blockers only ever grow during collapse, so processing the original movable
     // sources from right to left reaches the same fixed point as the old one-move-at-a-time loop.
@@ -1474,17 +1584,28 @@ fn compact_lanes_direct<Id>(
             continue;
         }
 
-        let Some(source_lane) = lanes_below[source_column].as_ref() else { continue };
-        if lane_id_at_snapshot(initial_mask_params.lane_ids_above, source_column) != Some(source_lane.lane_id) {
+        let Some(source_lane) = lanes_below[source_column].as_ref() else {
+            continue;
+        };
+        if lane_id_at_snapshot(initial_mask_params.lane_ids_above, source_column)
+            != Some(source_lane.lane_id)
+        {
             continue;
         }
 
         let moved_lane_id = source_lane.lane_id;
         lanes_below[destination_column] = lanes_below[source_column].take();
-        mark_horizontal_blockers(&mut horizontal_blocked_columns[..lane_width], source_column, destination_column);
+        mark_horizontal_blockers(
+            &mut horizontal_blocked_columns[..lane_width],
+            source_column,
+            destination_column,
+        );
 
         if moved_lane_id == initial_mask_params.node_lane_id {
-            debug_assert!(initial_mask_params.lane_ids_above[source_column] == Some(initial_mask_params.node_lane_id));
+            debug_assert!(
+                initial_mask_params.lane_ids_above[source_column]
+                    == Some(initial_mask_params.node_lane_id)
+            );
         }
     }
 }
@@ -1498,7 +1619,11 @@ fn build_below_with_merge_flags<T>(
     T: GraphNode,
     T::Id: Clone,
 {
-    let BuildBelowScratch { parent_lane_ids, empty_cols_without_above_lane, empty_cols_with_above_lane } = scratch;
+    let BuildBelowScratch {
+        parent_lane_ids,
+        empty_cols_without_above_lane,
+        empty_cols_with_above_lane,
+    } = scratch;
 
     for &merged_column in params.merged_columns {
         lanes_below[merged_column] = None;
@@ -1511,9 +1636,12 @@ fn build_below_with_merge_flags<T>(
     match params.node.parents().split_first() {
         None => {
             lanes_below[params.node_column] = None;
-        },
+        }
         Some((first_parent, extra_parents)) => {
-            if let Some(lane) = lanes_below.get_mut(params.node_column).and_then(|lane_option| lane_option.as_mut()) {
+            if let Some(lane) = lanes_below
+                .get_mut(params.node_column)
+                .and_then(|lane_option| lane_option.as_mut())
+            {
                 lane.target = first_parent.clone();
                 parent_lane_ids.push(params.node_lane_id);
             }
@@ -1521,7 +1649,9 @@ fn build_below_with_merge_flags<T>(
             let scan_start_column = params.node_column.saturating_add(1);
             if scan_start_column < lanes_below.len() {
                 for column_index in scan_start_column..lanes_below.len() {
-                    if column_index == params.node_column || is_merge_col(params.merged_column_flags, column_index) {
+                    if column_index == params.node_column
+                        || is_merge_col(params.merged_column_flags, column_index)
+                    {
                         continue;
                     }
                     if lanes_below[column_index].is_none() {
@@ -1541,7 +1671,10 @@ fn build_below_with_merge_flags<T>(
                 let new_lane_id = next_lane_id(next_lane_id_counter);
                 parent_lane_ids.push(new_lane_id);
 
-                let mut pending_lane = Some(ActiveLane { lane_id: new_lane_id, target: extra_parent_id.clone() });
+                let mut pending_lane = Some(ActiveLane {
+                    lane_id: new_lane_id,
+                    target: extra_parent_id.clone(),
+                });
 
                 while without_above_idx < empty_cols_without_above_lane.len()
                     && lanes_below[empty_cols_without_above_lane[without_above_idx]].is_some()
@@ -1549,7 +1682,8 @@ fn build_below_with_merge_flags<T>(
                     without_above_idx += 1;
                 }
                 if without_above_idx < empty_cols_without_above_lane.len() {
-                    lanes_below[empty_cols_without_above_lane[without_above_idx]] = pending_lane.take();
+                    lanes_below[empty_cols_without_above_lane[without_above_idx]] =
+                        pending_lane.take();
                     without_above_idx += 1;
                 }
 
@@ -1560,7 +1694,8 @@ fn build_below_with_merge_flags<T>(
                         with_above_idx += 1;
                     }
                     if with_above_idx < empty_cols_with_above_lane.len() {
-                        lanes_below[empty_cols_with_above_lane[with_above_idx]] = pending_lane.take();
+                        lanes_below[empty_cols_with_above_lane[with_above_idx]] =
+                            pending_lane.take();
                         with_above_idx += 1;
                     }
                 }
@@ -1569,7 +1704,7 @@ fn build_below_with_merge_flags<T>(
                     lanes_below.push(Some(remaining_lane));
                 }
             }
-        },
+        }
     }
 }
 
@@ -1623,7 +1758,12 @@ impl Default for GraphRenderer {
 impl GraphRenderer {
     #[inline]
     pub fn new(config: RenderConfig) -> Self {
-        Self { config, layout: GraphLayout::new(), last_fingerprint: None, rendered: String::new() }
+        Self {
+            config,
+            layout: GraphLayout::new(),
+            last_fingerprint: None,
+            rendered: String::new(),
+        }
     }
 
     #[inline]
@@ -1664,7 +1804,11 @@ impl GraphRenderer {
             rendered_output.push('\n');
         });
         if config.render_terminal_lanes {
-            render_terminal_lanes_with_config(config, &mut self.layout.active_lanes_above, rendered_output);
+            render_terminal_lanes_with_config(
+                config,
+                &mut self.layout.active_lanes_above,
+                rendered_output,
+            );
         }
 
         self.last_fingerprint = Some(fingerprint);
@@ -1683,7 +1827,11 @@ impl GraphRenderer {
     }
 }
 
-fn render_plan_with_config<T: GraphNode>(config: &RenderConfig, plan: &RowPlan<'_, T>, output: &mut String) {
+fn render_plan_with_config<T: GraphNode>(
+    config: &RenderConfig,
+    plan: &RowPlan<'_, T>,
+    output: &mut String,
+) {
     output.reserve(plan.operations.len());
     for op in &plan.operations {
         match op.cell {
@@ -1693,7 +1841,11 @@ fn render_plan_with_config<T: GraphNode>(config: &RenderConfig, plan: &RowPlan<'
     }
 }
 
-fn render_terminal_lanes_with_config<Id>(config: &RenderConfig, active_lanes: &mut LaneRow<Id>, output: &mut String) {
+fn render_terminal_lanes_with_config<Id>(
+    config: &RenderConfig,
+    active_lanes: &mut LaneRow<Id>,
+    output: &mut String,
+) {
     active_lanes.trim_right();
     if active_lanes.len() == 0 {
         return;
@@ -1703,8 +1855,11 @@ fn render_terminal_lanes_with_config<Id>(config: &RenderConfig, active_lanes: &m
     output.reserve(lane_width.saturating_mul(2));
 
     for column_index in 0..lane_width {
-        let connection_kind =
-            if active_lanes[column_index].is_some() { ConnectionKind::EndUp } else { ConnectionKind::Empty };
+        let connection_kind = if active_lanes[column_index].is_some() {
+            ConnectionKind::EndUp
+        } else {
+            ConnectionKind::Empty
+        };
         output.push(config.glyph_for_connection(connection_kind));
 
         if column_index + 1 < lane_width {
