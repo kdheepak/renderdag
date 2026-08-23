@@ -4,7 +4,7 @@ A small and fast rust library for rendering ASCII or Unicode directed acyclic gr
 
 ```
 ⍟─╮ merge
-│ ● side
+│ ● branch
 ● │ main
 ⊝─╯ root
 ```
