@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
@@ -706,11 +707,19 @@ where
         T: GraphNode<Id = Id>,
         Emit: FnMut(RowPlan<'a, T>),
     {
+        self.layout_with_lanes_below(nodes, |plan, _lanes_below| emit(plan));
+    }
+
+    fn layout_with_lanes_below<'a, T, Emit>(&mut self, nodes: &'a [T], mut emit: Emit)
+    where
+        T: GraphNode<Id = Id>,
+        Emit: FnMut(RowPlan<'a, T>, &LaneRow<Id>),
+    {
         for_each_node(
             nodes,
             |graph_node, node_id, child_count, parent_availability| {
                 let plan = self.layout_step(graph_node, node_id, child_count, parent_availability);
-                emit(plan);
+                emit(plan, &self.active_lanes_above);
             },
         );
     }
@@ -971,7 +980,7 @@ where
         }
     }
 
-    for (graph_node, node_id) in nodes.iter().zip(ordered_node_ids.into_iter()) {
+    for (graph_node, node_id) in nodes.iter().zip(ordered_node_ids) {
         let child_count = child_count_by_id.get(&node_id).copied().unwrap_or(0);
         let mut present_parent_count = 0usize;
         let mut missing_parent_count = 0usize;
@@ -1712,6 +1721,7 @@ fn build_below_with_merge_flags<T>(
 pub struct RenderConfig {
     pub glyphs: Glyphs,
     pub render_terminal_lanes: bool,
+    pub minimum_inter_node_rows: usize,
 }
 
 impl RenderConfig {
@@ -1738,6 +1748,11 @@ impl RenderConfig {
     #[inline]
     pub fn set_render_terminal_lanes(&mut self, enabled: bool) {
         self.render_terminal_lanes = enabled;
+    }
+
+    #[inline]
+    pub fn set_minimum_inter_node_rows(&mut self, row_count: usize) {
+        self.minimum_inter_node_rows = row_count;
     }
 }
 
@@ -1788,7 +1803,43 @@ impl GraphRenderer {
         T: GraphNode<Id = std::string::String>,
         T::Id: Clone + Eq,
     {
-        let fingerprint = render_fingerprint(nodes, &self.config);
+        self.render_if_changed_with_collected_content(nodes, None)
+    }
+
+    /// Renders only when graph topology or callback-provided content has changed.
+    ///
+    /// The callback is evaluated once per node on every render attempt. Borrowed content remains
+    /// borrowed for the duration of the call; owned strings are also accepted.
+    pub fn render_if_changed_with_content<'a, T, Content, ContentFor>(
+        &mut self,
+        nodes: &'a [T],
+        mut content_for: ContentFor,
+    ) -> bool
+    where
+        T: GraphNode<Id = std::string::String>,
+        T::Id: Clone + Eq,
+        Content: Into<Cow<'a, str>>,
+        ContentFor: FnMut(&'a T) -> Content,
+    {
+        let content_by_node = nodes
+            .iter()
+            .map(|node| content_for(node).into())
+            .collect::<Vec<Cow<'a, str>>>();
+        self.render_if_changed_with_collected_content(nodes, Some(&content_by_node))
+    }
+
+    fn render_if_changed_with_collected_content<T>(
+        &mut self,
+        nodes: &[T],
+        content_by_node: Option<&[Cow<'_, str>]>,
+    ) -> bool
+    where
+        T: GraphNode<Id = std::string::String>,
+        T::Id: Clone + Eq,
+    {
+        debug_assert!(content_by_node.is_none_or(|content| content.len() == nodes.len()));
+
+        let fingerprint = render_fingerprint(nodes, content_by_node, &self.config);
         if self.last_fingerprint == Some(fingerprint) {
             return false;
         }
@@ -1797,16 +1848,60 @@ impl GraphRenderer {
         self.rendered.clear();
 
         let config = &self.config;
+        let layout = &mut self.layout;
         let rendered_output = &mut self.rendered;
+        let mut node_index = 0usize;
 
-        self.layout.layout_with(nodes, |plan| {
+        layout.layout_with_lanes_below(nodes, |plan, lanes_below| {
+            let content = content_by_node
+                .and_then(|content| content.get(node_index))
+                .map_or("", |content| content.as_ref());
+            let mut content_lines = content.split('\n');
+            let first_content_line = content_lines.next().unwrap_or_default();
+
             render_plan_with_config(config, &plan, rendered_output);
+            append_content_line(rendered_output, first_content_line);
             rendered_output.push('\n');
+
+            let mut content_continuation_count = 0usize;
+            for content_line in content_lines {
+                let content_line_has_text = !normalized_content_line(content_line).is_empty();
+                let minimum_width = if content_line_has_text { plan.width } else { 0 };
+                let rendered = render_lane_row_prefix_with_config(
+                    config,
+                    lanes_below,
+                    ConnectionKind::Vertical,
+                    minimum_width,
+                    rendered_output,
+                );
+                debug_assert!(rendered || !content_line_has_text);
+                append_content_line(rendered_output, content_line);
+                rendered_output.push('\n');
+                content_continuation_count += 1;
+            }
+
+            if node_index + 1 < nodes.len() {
+                let remaining_row_count = config
+                    .minimum_inter_node_rows
+                    .saturating_sub(content_continuation_count);
+                for _ in 0..remaining_row_count {
+                    if !render_lane_row_with_config(
+                        config,
+                        lanes_below,
+                        ConnectionKind::Vertical,
+                        rendered_output,
+                    ) {
+                        break;
+                    }
+                }
+            }
+
+            node_index += 1;
         });
         if config.render_terminal_lanes {
             render_terminal_lanes_with_config(
                 config,
-                &mut self.layout.active_lanes_above,
+                &self.layout.active_lanes_above,
                 rendered_output,
             );
         }
@@ -1815,12 +1910,37 @@ impl GraphRenderer {
         true
     }
 
+    /// Renders the complete graph without node content.
     #[must_use]
     pub fn render_to_string(&mut self, nodes: &[Node]) -> String {
         self.render_if_changed(nodes);
         self.rendered.clone()
     }
 
+    /// Renders the complete graph with content beside each node.
+    ///
+    /// The first content line is rendered on the node row. Every newline creates one vertical
+    /// continuation row, including blank and trailing lines.
+    #[must_use]
+    pub fn render_to_string_with_content<'a, T, Content, ContentFor>(
+        &mut self,
+        nodes: &'a [T],
+        content_for: ContentFor,
+    ) -> String
+    where
+        T: GraphNode<Id = std::string::String>,
+        T::Id: Clone + Eq,
+        Content: Into<Cow<'a, str>>,
+        ContentFor: FnMut(&'a T) -> Content,
+    {
+        self.render_if_changed_with_content(nodes, content_for);
+        self.rendered.clone()
+    }
+
+    /// Renders only the graph cells for one node row.
+    ///
+    /// Node content and inter-node rows require whole-graph context and are emitted by the
+    /// whole-graph rendering methods instead.
     #[inline]
     pub fn render_plan_into(&self, plan: &RowPlan<'_, Node>, output: &mut String) {
         render_plan_with_config(&self.config, plan, output);
@@ -1841,22 +1961,65 @@ fn render_plan_with_config<T: GraphNode>(
     }
 }
 
-fn render_terminal_lanes_with_config<Id>(
-    config: &RenderConfig,
-    active_lanes: &mut LaneRow<Id>,
-    output: &mut String,
-) {
-    active_lanes.trim_right();
-    if active_lanes.len() == 0 {
+fn normalized_content_line(content_line: &str) -> &str {
+    content_line.strip_suffix('\r').unwrap_or(content_line)
+}
+
+fn append_content_line(output: &mut String, content_line: &str) {
+    let content_line = normalized_content_line(content_line);
+    if content_line.is_empty() {
         return;
     }
 
-    let lane_width = active_lanes.len();
+    output.push(' ');
+    output.push_str(content_line);
+}
+
+fn render_terminal_lanes_with_config<Id>(
+    config: &RenderConfig,
+    active_lanes: &LaneRow<Id>,
+    output: &mut String,
+) {
+    render_lane_row_with_config(config, active_lanes, ConnectionKind::EndUp, output);
+}
+
+fn render_lane_row_with_config<Id>(
+    config: &RenderConfig,
+    active_lanes: &LaneRow<Id>,
+    active_connection_kind: ConnectionKind,
+    output: &mut String,
+) -> bool {
+    if !render_lane_row_prefix_with_config(config, active_lanes, active_connection_kind, 0, output)
+    {
+        return false;
+    }
+
+    output.push('\n');
+    true
+}
+
+fn render_lane_row_prefix_with_config<Id>(
+    config: &RenderConfig,
+    active_lanes: &LaneRow<Id>,
+    active_connection_kind: ConnectionKind,
+    minimum_width: usize,
+    output: &mut String,
+) -> bool {
+    let active_lane_width = active_lanes
+        .iter()
+        .rposition(Option::is_some)
+        .map_or(0, |last_active_column| last_active_column + 1);
+    let minimum_lane_width = minimum_width.saturating_add(1) / 2;
+    let lane_width = active_lane_width.max(minimum_lane_width);
+    if lane_width == 0 {
+        return false;
+    }
+
     output.reserve(lane_width.saturating_mul(2));
 
     for column_index in 0..lane_width {
-        let connection_kind = if active_lanes[column_index].is_some() {
-            ConnectionKind::EndUp
+        let connection_kind = if active_lanes.lane_id_at(column_index).is_some() {
+            active_connection_kind
         } else {
             ConnectionKind::Empty
         };
@@ -1867,19 +2030,27 @@ fn render_terminal_lanes_with_config<Id>(
         }
     }
 
-    output.push('\n');
+    true
 }
 
-fn render_fingerprint<T: GraphNode>(nodes: &[T], _config: &RenderConfig) -> u64 {
+fn render_fingerprint<T: GraphNode>(
+    nodes: &[T],
+    content_by_node: Option<&[Cow<'_, str>]>,
+    _config: &RenderConfig,
+) -> u64 {
     let mut hasher = DefaultHasher::new();
 
     nodes.len().hash(&mut hasher);
-    for node in nodes {
+    for (node_index, node) in nodes.iter().enumerate() {
         node.id().hash(&mut hasher);
         node.parents().len().hash(&mut hasher);
         for parent_id in node.parents() {
             parent_id.hash(&mut hasher);
         }
+        content_by_node
+            .and_then(|content| content.get(node_index))
+            .map_or("", |content| content.as_ref())
+            .hash(&mut hasher);
     }
 
     hasher.finish()

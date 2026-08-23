@@ -14,6 +14,25 @@ mod tests {
 
     static COLOR_EYRE_INIT: Once = Once::new();
 
+    #[derive(Clone, Debug)]
+    struct TestNode {
+        id: String,
+        parents: Vec<String>,
+        content: String,
+    }
+
+    impl GraphNode for TestNode {
+        type Id = String;
+
+        fn id(&self) -> Self::Id {
+            self.id.clone()
+        }
+
+        fn parents(&self) -> &[Self::Id] {
+            &self.parents
+        }
+    }
+
     pub fn parse_nodes(input: &str) -> color_eyre::eyre::Result<Vec<Node>> {
         fn parse_parent_list(part: &str) -> Vec<NodeId> {
             part.split(',')
@@ -63,6 +82,33 @@ mod tests {
         test_output_with_config(data, expected, RenderConfig::default())
     }
 
+    fn test_output_with_minimum_inter_node_row(
+        data: &str,
+        expected: &str,
+    ) -> color_eyre::Result<()> {
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(1);
+        test_output_with_config(data, expected, config)
+    }
+
+    fn render_nodes_with_config(nodes: &[Node], config: RenderConfig) -> String {
+        let mut renderer = GraphRenderer::new(config);
+        renderer.render_to_string(nodes)
+    }
+
+    fn render_nodes_with_content<'a, Content, ContentFor>(
+        nodes: &'a [Node],
+        config: RenderConfig,
+        content_for: ContentFor,
+    ) -> String
+    where
+        Content: Into<std::borrow::Cow<'a, str>>,
+        ContentFor: FnMut(&'a Node) -> Content,
+    {
+        let mut renderer = GraphRenderer::new(config);
+        renderer.render_to_string_with_content(nodes, content_for)
+    }
+
     pub fn test_output_with_config(
         data: &str,
         expected: &str,
@@ -76,23 +122,20 @@ mod tests {
 
         let nodes = parse_nodes(data).map_err(|e| eyre!("parse_nodes failed: {:?}", e))?;
 
-        let mut r = GraphRenderer::new(config);
-        let actual_glyphs = r.render_to_string(&nodes);
-
         let expected_n = expected.trim().to_string();
 
-        // If the expected output contains node ids / parents, enrich the actual output the same way.
+        // If the expected output contains node ids / parents, render them as node content.
         let expected_has_suffix = expected_n
             .chars()
             .any(|c| c.is_ascii_alphanumeric() || c == '(' || c == ')');
 
-        let actual_pretty = if expected_has_suffix {
-            render_with_suffix(&actual_glyphs, &nodes)
+        let mut renderer = GraphRenderer::new(config);
+        let actual = if expected_has_suffix {
+            renderer.render_to_string_with_content(&nodes, render_node_suffix)
         } else {
-            actual_glyphs
+            renderer.render_to_string(&nodes)
         };
-
-        let actual_n = actual_pretty.trim().to_string();
+        let actual_n = actual.trim().to_string();
 
         if expected_n != actual_n {
             println!("\n{}", diff_blocks(&expected_n, &actual_n));
@@ -106,51 +149,22 @@ mod tests {
         Ok(())
     }
 
-    fn render_with_suffix(rendered: &str, nodes: &[Node]) -> String {
-        let mut out = String::with_capacity(rendered.len() + nodes.len() * 16);
+    fn render_node_suffix(node: &Node) -> String {
+        let mut suffix = node.id.clone();
 
-        let mut rendered_lines = rendered.lines();
-        let mut first_line = true;
-
-        for node in nodes {
-            let Some(line) = rendered_lines.next() else {
-                break;
-            };
-
-            if !first_line {
-                out.push('\n');
-            }
-            first_line = false;
-
-            out.push_str(line);
-
-            // " <id>"
-            out.push(' ');
-            out.push_str(&node.id);
-
-            // " (<p1> <p2> ...)"
-            if !node.parents.is_empty() {
-                out.push(' ');
-                out.push('(');
-                for (pi, p) in node.parents.iter().enumerate() {
-                    if pi != 0 {
-                        out.push(' ');
-                    }
-                    out.push_str(p);
+        if !node.parents.is_empty() {
+            suffix.push(' ');
+            suffix.push('(');
+            for (parent_index, parent_id) in node.parents.iter().enumerate() {
+                if parent_index != 0 {
+                    suffix.push(' ');
                 }
-                out.push(')');
+                suffix.push_str(parent_id);
             }
+            suffix.push(')');
         }
 
-        for line in rendered_lines {
-            if !first_line {
-                out.push('\n');
-            }
-            first_line = false;
-            out.push_str(line);
-        }
-
-        out
+        suffix
     }
 
     #[test]
@@ -1113,6 +1127,824 @@ c
     }
 
     #[test]
+    fn minimum_inter_node_rows_can_be_enabled_for_linear_history() -> color_eyre::Result<()> {
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(1);
+
+        test_output_with_config(
+            r#"
+a: b
+b: c
+c
+"#,
+            r#"
+⦿
+│
+●
+│
+⊝
+"#,
+            config,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_follow_branch_layout() -> color_eyre::Result<()> {
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(1);
+
+        test_output_with_config(
+            r#"
+d: b, c
+c: a
+b: a
+a
+"#,
+            r#"
+⍟─╮
+│ │
+│ ●
+│ │
+● │
+│ │
+⊝─╯
+"#,
+            config,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_do_not_add_blank_rows_between_disconnected_nodes()
+    -> color_eyre::Result<()> {
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(1);
+
+        test_output_with_config(
+            r#"
+a
+b
+"#,
+            r#"
+⊝
+⊝
+"#,
+            config,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_use_the_configured_vertical_glyph() -> color_eyre::Result<()> {
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(1);
+        config.set_connection_glyph(ConnectionKind::Vertical, '!');
+
+        test_output_with_config(
+            r#"
+a: b
+b
+"#,
+            r#"
+⦿
+!
+⊝
+"#,
+            config,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_is_zero_by_default() {
+        assert_eq!(RenderConfig::default().minimum_inter_node_rows, 0);
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_handle_empty_and_single_node_graphs() -> color_eyre::Result<()> {
+        test_output_with_minimum_inter_node_row("", "")?;
+        test_output_with_minimum_inter_node_row("a", "⊝")?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_follow_lane_compaction() -> color_eyre::Result<()> {
+        test_output_with_minimum_inter_node_row(
+            r#"
+X: A, B, C
+A
+B
+C: D
+D
+"#,
+            r#"
+⍟─┬─╮
+│ │ │
+⊝ │ │
+  │ │
+  ⊝ │
+    │
+●───╯
+│
+⊝
+"#,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_preserve_crossover_lane_columns() -> color_eyre::Result<()> {
+        test_output_with_minimum_inter_node_row(
+            r#"
+f: e, c
+e: b, d
+d: a
+c: a
+b: a
+a
+"#,
+            r#"
+⍟─╮
+│ │
+⊗─┊─╮
+│ │ │
+│ │ ●
+│ │ │
+│ ● │
+│ │ │
+● │ │
+│ │ │
+⊝─┴─╯
+"#,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_render_multi_parent_fan_out() -> color_eyre::Result<()> {
+        test_output_with_minimum_inter_node_row(
+            r#"
+A: B, C, D, E
+D: B
+C: B
+E: B
+B
+"#,
+            r#"
+⍟─┬─┬─╮
+│ │ │ │
+│ │ ● │
+│ │ │ │
+│ ● │ │
+│ │ │ │
+│ │ │ ●
+│ │ │ │
+⊝─┴─┴─╯
+"#,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_continue_partially_missing_parent_lanes() -> color_eyre::Result<()> {
+        test_output_with_minimum_inter_node_row(
+            r#"
+Y: X
+X: A, Z
+A
+T
+"#,
+            r#"
+⦿
+│
+⊘─╮
+│ │
+⊝ │
+  │
+⊝ │
+"#,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_continue_orphan_lanes() -> color_eyre::Result<()> {
+        test_output_with_minimum_inter_node_row(
+            r#"
+X: Z
+T
+"#,
+            r#"
+◌
+│
+│ ⊝
+"#,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_use_the_configured_empty_glyph() -> color_eyre::Result<()> {
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(1);
+        config.set_connection_glyph(ConnectionKind::Empty, '.');
+
+        test_output_with_config(
+            r#"
+X: A, B, C
+A
+B
+C: D
+D
+"#,
+            r#"
+⍟─┬─╮
+│.│.│
+⊝.│.│
+..│.│
+..⊝.│
+....│
+●───╯
+│
+⊝
+"#,
+            config,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_output_is_stable_across_cache_hits_and_reset() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b: c
+c
+"#,
+        )?;
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(1);
+        let mut renderer = GraphRenderer::new(config);
+
+        let expected = "⦿\n│\n●\n│\n⊝\n";
+        assert_eq!(renderer.render_to_string(&nodes), expected);
+        assert!(!renderer.render_if_changed(&nodes));
+        assert_eq!(renderer.rendered(), expected);
+
+        renderer.reset();
+        assert!(renderer.render_if_changed(&nodes));
+        assert_eq!(renderer.rendered(), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn layout_with_still_emits_one_plan_per_node() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b: c
+c
+"#,
+        )?;
+        let mut layout = GraphLayout::new();
+        let mut emitted_node_ids = Vec::new();
+
+        layout.layout_with(&nodes, |plan| emitted_node_ids.push(plan.node.id.clone()));
+
+        assert_eq!(emitted_node_ids, ["a", "b", "c"]);
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_can_render_multiple_rows() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b: c
+c
+"#,
+        )?;
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(2);
+
+        assert_eq!(
+            render_nodes_with_config(&nodes, config),
+            "⦿\n│\n│\n●\n│\n│\n⊝\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_setter_accepts_zero_and_multiple_rows() {
+        let mut config = RenderConfig::default();
+
+        config.set_minimum_inter_node_rows(4);
+        assert_eq!(config.minimum_inter_node_rows, 4);
+
+        config.set_minimum_inter_node_rows(0);
+        assert_eq!(config.minimum_inter_node_rows, 0);
+    }
+
+    #[test]
+    fn multiple_minimum_inter_node_rows_follow_branch_layout() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+d: b, c
+c: a
+b: a
+a
+"#,
+        )?;
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(2);
+
+        assert_eq!(
+            render_nodes_with_config(&nodes, config),
+            concat!(
+                "⍟─╮\n",
+                "│ │\n",
+                "│ │\n",
+                "│ ●\n",
+                "│ │\n",
+                "│ │\n",
+                "● │\n",
+                "│ │\n",
+                "│ │\n",
+                "⊝─╯\n",
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_skip_disconnected_nodes() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a
+b
+"#,
+        )?;
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(3);
+
+        assert_eq!(render_nodes_with_config(&nodes, config), "⊝\n⊝\n");
+        Ok(())
+    }
+
+    #[test]
+    fn empty_content_matches_graph_only_rendering() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b
+"#,
+        )?;
+        let graph_only = render_nodes_with_config(&nodes, RenderConfig::default());
+        let with_empty_content = render_nodes_with_content(&nodes, RenderConfig::default(), |_| "");
+
+        assert_eq!(with_empty_content, graph_only);
+        Ok(())
+    }
+
+    #[test]
+    fn single_line_content_does_not_add_a_continuation_row() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b
+"#,
+        )?;
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, RenderConfig::default(), |node| {
+                if node.id == "a" { "top" } else { "" }
+            }),
+            "⦿ top\n⊝\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn every_newline_creates_one_content_continuation_row() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b: c
+c
+"#,
+        )?;
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, RenderConfig::default(), |node| {
+                match node.id.as_str() {
+                    "a" => "top\none\ntwo",
+                    "c" => "root\nfinal detail",
+                    _ => "",
+                }
+            }),
+            concat!(
+                "⦿ top\n",
+                "│ one\n",
+                "│ two\n",
+                "●\n",
+                "⊝ root\n",
+                "  final detail\n",
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn newline_only_content_creates_a_lane_only_continuation_row() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b
+"#,
+        )?;
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, RenderConfig::default(), |node| {
+                if node.id == "a" { "\n" } else { "" }
+            }),
+            "⦿\n│\n⊝\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn blank_content_continuations_without_active_lanes_have_no_trailing_spaces()
+    -> color_eyre::Result<()> {
+        let nodes = parse_nodes("a")?;
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, RenderConfig::default(), |_| "\n"),
+            "⊝\n\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn content_continuations_can_exceed_the_inter_node_minimum() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b
+"#,
+        )?;
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(1);
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, config, |node| {
+                if node.id == "a" { "top\none\ntwo" } else { "" }
+            }),
+            "⦿ top\n│ one\n│ two\n⊝\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_fill_after_shorter_content() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b
+"#,
+        )?;
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(3);
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, config, |node| {
+                if node.id == "a" { "top\ndetail" } else { "" }
+            }),
+            "⦿ top\n│ detail\n│\n│\n⊝\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn multiline_content_consumes_a_multi_lane_inter_node_minimum() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+d: b, c
+c: a
+b: a
+a
+"#,
+        )?;
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(3);
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, config, |node| {
+                if node.id == "c" { "side\ndetail" } else { "" }
+            }),
+            concat!(
+                "⍟─╮\n",
+                "│ │\n",
+                "│ │\n",
+                "│ │\n",
+                "│ ● side\n",
+                "│ │ detail\n",
+                "│ │\n",
+                "│ │\n",
+                "● │\n",
+                "│ │\n",
+                "│ │\n",
+                "│ │\n",
+                "⊝─╯\n",
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn disconnected_node_content_renders_without_inventing_minimum_rows() -> color_eyre::Result<()>
+    {
+        let nodes = parse_nodes(
+            r#"
+a
+b
+"#,
+        )?;
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(3);
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, config, |node| {
+                if node.id == "a" {
+                    "first\ncontinued"
+                } else {
+                    ""
+                }
+            }),
+            "⊝ first\n  continued\n⊝\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn final_node_content_continuations_precede_terminal_caps() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+X: A, Z
+A
+"#,
+        )?;
+        let mut config = RenderConfig::default();
+        config.set_render_terminal_lanes(true);
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, config, |node| {
+                if node.id == "A" { "root\nmore" } else { "" }
+            }),
+            "⊛─╮\n⊝ │ root\n  │ more\n  ╵\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn multiline_content_rows_follow_branch_lane_layout() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+d: b, c
+c: a
+b: a
+a
+"#,
+        )?;
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, RenderConfig::default(), |node| {
+                if node.id == "c" { "side\ndetail" } else { "" }
+            }),
+            "⍟─╮\n│ ● side\n│ │ detail\n● │\n⊝─╯\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn multiline_content_rows_use_custom_connection_glyphs() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+X: A, B, C
+A
+B
+C
+"#,
+        )?;
+        let mut config = RenderConfig::default();
+        config.set_connection_glyph(ConnectionKind::Vertical, '!');
+        config.set_connection_glyph(ConnectionKind::Empty, '.');
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, config, |node| {
+                if node.id == "X" { "fan\ndetail" } else { "" }
+            }),
+            concat!(
+                "⍟─┬─╮ fan\n",
+                "!.!.! detail\n",
+                "⊝.!.!\n",
+                "..⊝.!\n",
+                "....⊝\n",
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn blank_content_lines_and_trailing_newlines_are_preserved_without_trailing_spaces()
+    -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b
+"#,
+        )?;
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, RenderConfig::default(), |node| {
+                if node.id == "a" { "top\n\nlast\n" } else { "" }
+            }),
+            "⦿ top\n│\n│ last\n│\n⊝\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn carriage_returns_are_removed_from_multiline_content() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b
+"#,
+        )?;
+
+        assert_eq!(
+            render_nodes_with_content(&nodes, RenderConfig::default(), |node| {
+                if node.id == "a" {
+                    "top\r\ndetail\r\nlast\r"
+                } else {
+                    ""
+                }
+            }),
+            "⦿ top\n│ detail\n│ last\n⊝\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn content_changes_invalidate_the_render_cache() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b
+"#,
+        )?;
+        let mut content = "one".to_string();
+        let mut renderer = GraphRenderer::default();
+
+        assert!(renderer.render_if_changed_with_content(&nodes, |node| {
+            if node.id == "a" {
+                content.clone()
+            } else {
+                String::new()
+            }
+        }));
+        assert_eq!(renderer.rendered(), "⦿ one\n⊝\n");
+        assert!(!renderer.render_if_changed_with_content(&nodes, |node| {
+            if node.id == "a" {
+                content.clone()
+            } else {
+                String::new()
+            }
+        }));
+
+        content = "two\ndetail".to_string();
+        assert!(renderer.render_if_changed_with_content(&nodes, |node| {
+            if node.id == "a" {
+                content.clone()
+            } else {
+                String::new()
+            }
+        }));
+        assert_eq!(renderer.rendered(), "⦿ two\n│ detail\n⊝\n");
+
+        content.clear();
+        assert!(renderer.render_if_changed_with_content(&nodes, |node| {
+            if node.id == "a" {
+                content.clone()
+            } else {
+                String::new()
+            }
+        }));
+        assert_eq!(renderer.rendered(), "⦿\n⊝\n");
+        assert!(!renderer.render_if_changed(&nodes));
+
+        Ok(())
+    }
+
+    #[test]
+    fn content_callback_is_evaluated_once_per_node_per_render_attempt() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b
+"#,
+        )?;
+        let call_count = std::cell::Cell::new(0usize);
+        let mut renderer = GraphRenderer::default();
+
+        assert!(renderer.render_if_changed_with_content(&nodes, |node| {
+            call_count.set(call_count.get() + 1);
+            node.id.as_str()
+        }));
+        assert_eq!(call_count.get(), 2);
+
+        assert!(!renderer.render_if_changed_with_content(&nodes, |node| {
+            call_count.set(call_count.get() + 1);
+            node.id.as_str()
+        }));
+        assert_eq!(call_count.get(), 4);
+
+        Ok(())
+    }
+
+    #[test]
+    fn sidecar_content_maps_can_supply_multiline_content() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b
+"#,
+        )?;
+        let content_by_id = std::collections::HashMap::from([("a", "sidecar\ndetail")]);
+        let mut renderer = GraphRenderer::default();
+
+        assert_eq!(
+            renderer.render_to_string_with_content(&nodes, |node| {
+                content_by_id.get(node.id.as_str()).copied().unwrap_or("")
+            }),
+            "⦿ sidecar\n│ detail\n⊝\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn custom_graph_nodes_can_supply_borrowed_multiline_content() {
+        let nodes = vec![
+            TestNode {
+                id: "a".to_string(),
+                parents: vec!["b".to_string()],
+                content: "custom\ndetail".to_string(),
+            },
+            TestNode {
+                id: "b".to_string(),
+                parents: Vec::new(),
+                content: String::new(),
+            },
+        ];
+        let mut renderer = GraphRenderer::default();
+
+        assert_eq!(
+            renderer.render_to_string_with_content(&nodes, |node| node.content.as_str()),
+            "⦿ custom\n│ detail\n⊝\n"
+        );
+    }
+
+    #[test]
+    fn content_callbacks_can_generate_owned_strings() -> color_eyre::Result<()> {
+        let nodes = parse_nodes(
+            r#"
+a: b
+b
+"#,
+        )?;
+        let mut renderer = GraphRenderer::default();
+
+        assert_eq!(
+            renderer.render_to_string_with_content(&nodes, |node| format!("node {}", node.id)),
+            "⦿ node a\n⊝ node b\n"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_basic_branch_and_merge() -> color_eyre::Result<()> {
         test_output(
             r#"
@@ -1324,6 +2156,33 @@ A
 ⦿ Y (X)
 ⊘─╮ X (A Z)
 ⊝ │ A
+  ╵
+"#,
+            config,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_node_rows_and_terminal_caps_can_be_enabled_together() -> color_eyre::Result<()>
+    {
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(1);
+        config.set_render_terminal_lanes(true);
+
+        test_output_with_config(
+            r#"
+Y: X
+X: A, Z
+A
+"#,
+            r#"
+⦿
+│
+⊘─╮
+│ │
+⊝ │
   ╵
 "#,
             config,
@@ -2044,6 +2903,51 @@ A
 ● │ │ B (A)
 ⊝─┴─╯ A
 "#,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_inter_rows_follows_multiple_source_nodes_branching_in() -> color_eyre::Result<()> {
+        let mut config = RenderConfig::default();
+        config.set_minimum_inter_node_rows(2);
+        test_output_with_config(
+            r#"
+    H: E
+    G: E
+    F: E, D, C
+    E: B
+    D: A
+    C: A
+    B: A
+    A
+"#,
+            r#"
+⦿ H (E)
+│
+│
+│ ⦿ G (E)
+│ │
+│ │
+│ │ ⍟─┬─╮ F (E D C)
+│ │ │ │ │
+│ │ │ │ │
+●─┴─╯ │ │ E (B)
+│     │ │
+│     │ │
+│ ●───╯ │ D (A)
+│ │     │
+│ │     │
+│ │ ●───╯ C (A)
+│ │ │
+│ │ │
+● │ │ B (A)
+│ │ │
+│ │ │
+⊝─┴─╯ A
+"#,
+            config,
         )?;
 
         Ok(())
