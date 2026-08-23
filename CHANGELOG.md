@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/kdheepak/renderdag/compare/v0.3.1...v0.4.0) - 2026-08-23
+
+### Added
+
+- *(graph)* [**breaking**] add interstitial lanes
+
+### Other
+
+- *(readme)* update example graph to use "branch" label
+- *(deps)* bump serde ([#8](https://github.com/kdheepak/renderdag/pull/8))
+- *(deps)* bump actions/checkout from 6 to 7 ([#7](https://github.com/kdheepak/renderdag/pull/7))
+- *(readme)* update description, add install and license sections
+
 ## [0.3.1](https://github.com/kdheepak/renderdag/compare/v0.3.0...v0.3.1) - 2026-04-08
 
 ### Other
